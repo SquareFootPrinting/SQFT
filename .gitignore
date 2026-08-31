@@ -14,3 +14,4 @@ npm-debug.log*
 # Local uploads / temp
 uploads/
 tmp/
+.env
