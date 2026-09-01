@@ -7,7 +7,6 @@ Implemented in this build:
 3. Server recalculates production-type minimums and the final total before saving an order; Stripe charges the total stored on the MongoDB order.
 4. Stripe success page added as `order-confirmation.html`.
 6. Admin order details now show payment, delivery, shipping address/cost, transaction ID and allow saving a UPS tracking number.
-7. Zelle configuration moved to server environment variables and `/api/checkout/config`; no Zelle recipient needs to be hard-coded in checkout HTML.
 8. New-order notification recipient moved to `ORDER_NOTIFICATION_EMAIL`.
 
 ## Render variables still required for live services
@@ -21,10 +20,6 @@ UPS:
 - `UPS_ENV=production`
 - `SHIPPING_QUOTE_SECRET` (long random secret)
 
-Zelle (when business details are available):
-- `ZELLE_RECIPIENT_NAME`
-- `ZELLE_RECIPIENT`
-- `ZELLE_QR_URL` (optional)
 
 
 Email:

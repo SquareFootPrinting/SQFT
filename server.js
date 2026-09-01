@@ -137,7 +137,6 @@ const Order = mongoose.model(
         shipping_service: { type: mongoose.Schema.Types.Mixed, default: null },
         shipping_cost: { type: Number, default: 0 },
         payment_method: { type: String, default: '' },
-        zelle_reference: { type: String, default: '' },
         tracking_number: { type: String, default: '' },
         carrier: { type: String, default: '' },
 
@@ -1183,6 +1182,8 @@ function moneyNumber(value) {
     return Number.isFinite(n) ? n : 0;
 }
 
+const FLAT_SHIPPING_FEE = 25;
+
 async function calculateServerOrderTotal(items = [], shippingCost = 0) {
     const catalog = await PricingCatalog.findOne({ key: 'storefront' }).lean();
     const productionTypes = catalog?.pricing?.SFP_PRICING_CONFIG?.productionTypes || {};
@@ -1277,16 +1278,6 @@ app.post('/api/shipping/ups-rates', async (req, res) => {
     }
 });
 
-app.get('/api/checkout/config', (req, res) => {
-    res.json({
-        zelle: {
-            enabled: Boolean(process.env.ZELLE_RECIPIENT),
-            recipientName: process.env.ZELLE_RECIPIENT_NAME || 'Square Foot Printing',
-            recipient: process.env.ZELLE_RECIPIENT || '',
-            qrUrl: process.env.ZELLE_QR_URL || ''
-        }
-    });
-});
 
 // -----------------------------------------------------
 // CREAR ORDEN
@@ -1306,10 +1297,9 @@ app.post(
             let shippingCost = 0;
             let shippingService = null;
             if (orderData.delivery_method === 'shipping') {
-                const verifiedRate = verifyShippingRate(orderData.shipping_service?.quoteToken);
-                if (!verifiedRate) return res.status(400).json({ success:false, error:'Shipping rate expired or invalid. Please get UPS rates again.' });
-                shippingCost = Number(verifiedRate.amount);
-                shippingService = verifiedRate;
+                // Temporary flat-rate shipping. The server is authoritative so the browser cannot change the fee.
+                shippingCost = FLAT_SHIPPING_FEE;
+                shippingService = { serviceName: 'Flat Rate Shipping', amount: FLAT_SHIPPING_FEE, currency: 'USD' };
             }
 
             const calculated = await calculateServerOrderTotal(orderData.order_items, shippingCost);
@@ -1338,7 +1328,6 @@ app.post(
                     shipping_service: shippingService,
                     shipping_cost: shippingCost,
                     payment_method: orderData.payment_method || '',
-                    zelle_reference: orderData.zelle_reference || '',
 
                     total_price:
                         `$${calculated.total.toFixed(2)}`,

@@ -19,7 +19,7 @@ The system allows customers to configure custom printing products, calculate pri
 - Centralized pricing management
 - MongoDB-based pricing overrides
 - Stripe payment processing
-- Stripe card and Zelle payment options
+- Stripe credit/debit card payments
 
 ## Product Categories
 
