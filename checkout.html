@@ -577,6 +577,7 @@ async function prepareOrderItems(cart, orderNumber) {
                     order_items: preparedItems,
 
                     payment_method: currentPayment,
+                    pricing_tier: localStorage.getItem('userTier') === 'wholesale' ? 'wholesale' : 'retail',
                     status: "Pending",
                     payment_status: "Pending"
                 };
@@ -586,7 +587,8 @@ async function prepareOrderItems(cart, orderNumber) {
                     {
                         method: 'POST',
                         headers: {
-                            'Content-Type': 'application/json'
+                            'Content-Type': 'application/json',
+                            ...(localStorage.getItem('token') ? { 'x-auth-token': localStorage.getItem('token') } : {})
                         },
                         body: JSON.stringify(oInfo)
                     }

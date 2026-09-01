@@ -791,14 +791,15 @@ app.post(
                 );
 
 
-            const isWholesale =
-                (
-                    inviteCode &&
-                    inviteCode
-                        .trim()
-                        .toLowerCase() ===
-                        'sight2026'
-                );
+            const configuredWholesaleCode = String(process.env.WHOLESALE_INVITE_CODE || '').trim();
+            const isWholesale = Boolean(
+                configuredWholesaleCode &&
+                inviteCode &&
+                crypto.timingSafeEqual(
+                    Buffer.from(String(inviteCode).trim()),
+                    Buffer.from(configuredWholesaleCode)
+                )
+            );
 
 
             user =
@@ -1213,16 +1214,53 @@ async function calculateServerOrderTotal(items = [], shippingCost = 0) {
     const totals = {};
     const minimums = {};
 
-    for (const item of Array.isArray(items) ? items : []) {
-        const key = String(item.productionType || item.productId || item.name || 'other');
-        const linePrice = moneyNumber(item.price);
-        if (linePrice < 0) throw new Error('Invalid item price');
-        totals[key] = (totals[key] || 0) + linePrice;
-        minimums[key] = Math.max(minimums[key] || 0, Number(productionTypes?.[key]?.minimumOrder ?? item.minOrder ?? defaultMinimum));
+    if (!Array.isArray(items) || items.length === 0) {
+        const error = new Error('Order must contain at least one item');
+        error.statusCode = 400;
+        throw error;
     }
 
-    const subtotal = Object.keys(totals).reduce((sum, key) => sum + Math.max(totals[key], minimums[key] || 0), 0);
-    return { subtotal: Number(subtotal.toFixed(2)), total: Number((subtotal + Number(shippingCost || 0)).toFixed(2)) };
+    for (const item of items) {
+        // productionType and minimums are server-authoritative. Never fall back
+        // to item.minOrder/productId/name supplied by the browser.
+        const key = String(item?.productionType || '').trim();
+        const typeConfig = productionTypes?.[key];
+        if (!key || !typeConfig) {
+            const error = new Error('Invalid product production type');
+            error.statusCode = 400;
+            throw error;
+        }
+
+        const linePrice = moneyNumber(item.price);
+        if (!Number.isFinite(linePrice) || linePrice <= 0) {
+            const error = new Error('Invalid item price');
+            error.statusCode = 400;
+            throw error;
+        }
+
+        totals[key] = (totals[key] || 0) + linePrice;
+        const configuredMinimum = Number(typeConfig.minimumOrder ?? defaultMinimum);
+        minimums[key] = Math.max(minimums[key] || 0, Number.isFinite(configuredMinimum) ? configuredMinimum : defaultMinimum);
+    }
+
+    const subtotal = Object.keys(totals).reduce(
+        (sum, key) => sum + Math.max(totals[key], minimums[key] || defaultMinimum),
+        0
+    );
+    return {
+        subtotal: Number(subtotal.toFixed(2)),
+        total: Number((subtotal + Number(shippingCost || 0)).toFixed(2))
+    };
+}
+
+function readOptionalUser(req) {
+    const token = String(req.header('x-auth-token') || '').trim();
+    if (!token) return null;
+    try {
+        return jwt.verify(token, process.env.JWT_SECRET || 'secretSFP');
+    } catch (_) {
+        return null;
+    }
 }
 
 function signShippingRate(payload) {
@@ -1315,6 +1353,21 @@ app.post(
             const orderData =
                 req.body;
 
+            // localStorage is display state only; wholesale authorization is
+            // always re-checked against the authenticated MongoDB user.
+            const requestedTier = String(orderData.pricing_tier || 'retail').toLowerCase();
+            const tokenUser = readOptionalUser(req);
+            let serverWholesale = false;
+            if (tokenUser?.id) {
+                const account = await User.findById(tokenUser.id).select('isWholesale').lean();
+                serverWholesale = Boolean(account?.isWholesale);
+            }
+            if (requestedTier === 'wholesale' && !serverWholesale) {
+                return res.status(403).json({
+                    success: false,
+                    error: 'Wholesale pricing requires an authenticated wholesale account.'
+                });
+            }
 
             let shippingCost = 0;
             let shippingService = null;
@@ -1404,16 +1457,10 @@ app.post(
 
 
         } catch (error) {
-
-            res
-                .status(500)
-                .json({
-
-                    success: false,
-
-                    error:
-                        error.message
-                });
+            res.status(error.statusCode || 500).json({
+                success: false,
+                error: error.message
+            });
         }
     }
 );
@@ -2221,9 +2268,14 @@ app.get(
                 status:
                     order.status,
 
-                items:
-                    order.order_items ||
-                    []
+                // Public tracking must never expose artwork URLs, upload
+                // metadata, prices, or arbitrary item fields.
+                items: (order.order_items || []).map(item => ({
+                    name: String(item?.name || 'Product').slice(0, 160)
+                })),
+
+                tracking_number: order.tracking_number || '',
+                carrier: order.carrier || ''
             });
 
 
