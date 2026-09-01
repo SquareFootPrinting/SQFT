@@ -189,6 +189,18 @@
                 if (window.getLargeFormatPrice) {
                     const pData = window.getLargeFormatPrice(b.id);
                     price = pData.unitPrice;
+
+                    // Wrap Adhesive stores its rates under Calendar/Cast instead of
+                    // a top-level material field. The category card should show the
+                    // lowest available material rate as its "starting at" price.
+                    if (b.id === 'wrap-adhesive') {
+                        const wrap = window.largeFormatPricing?.['wrap-adhesive'];
+                        const rates = [wrap?.calendar?.material, wrap?.cast?.material]
+                            .map(Number)
+                            .filter(Number.isFinite);
+                        if (rates.length) price = Math.min(...rates) * (isWholesale ? 1 : 2);
+                    }
+
                     if (b.id === 'gallery-canvas' || b.id === 'table-cover') {
                        const firstKey = Object.keys(window.largeFormatPricing[b.id].sizes)[0];
                        price = window.largeFormatPricing[b.id].sizes[firstKey] * (isWholesale ? 1 : 2);
