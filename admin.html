@@ -121,12 +121,11 @@
                             <h1 class="text-4xl md:text-5xl heavy-italic text-gray-900 mb-4 tracking-tighter">Edit Pricing</h1>
                             <div class="h-2 w-24 bg-red-600 rounded-full"></div>
                             <p class="mt-5 text-xs text-gray-500 font-semibold max-w-2xl">
-                                Changes are saved as MongoDB overrides. The original values in pricing-v3.js remain your defaults.
+                                Prices are loaded from and saved directly to the MongoDB storefront pricing catalog.
                             </p>
                         </div>
                         <div class="flex gap-3 flex-wrap">
-                            <button onclick="migratePricingToMongoDB()" class="px-5 py-3 rounded-xl border border-gray-900 text-[10px] font-black uppercase hover:bg-black hover:text-white">Initialize MongoDB Pricing</button>
-                            <button onclick="resetAllPricing()" class="px-5 py-3 rounded-xl border border-gray-200 text-[10px] font-black uppercase hover:border-black">Reset All</button>
+                            <button onclick="resetAllPricing()" class="px-5 py-3 rounded-xl border border-gray-200 text-[10px] font-black uppercase hover:border-black">Reload Saved</button>
                             <button onclick="savePricing()" class="px-6 py-3 rounded-xl bg-red-600 text-white text-[10px] font-black uppercase hover:bg-black">Save Changes</button>
                         </div>
                     </div>
@@ -650,228 +649,174 @@
 
         async function loadPricingEditor() {
             const editor = document.getElementById('pricing-editor');
-            editor.innerHTML = '<div class="text-gray-400 italic text-sm">Loading pricing...</div>';
+            editor.innerHTML = '<div class="text-gray-400 italic text-sm">Loading pricing from MongoDB...</div>';
 
             pricingDefaults = {};
+            pricingOverrides = {};
             pricingMeta = {};
-            const categories = [];
-
-            // Production minimums are editable too.
-            const minimums = flattenNumeric(window.SFP_PRICING_CONFIG || {}, 'SFP_PRICING_CONFIG');
-            Object.assign(pricingDefaults, minimums);
-            categories.push(['Production Minimums', minimums]);
-
-            PRICING_SOURCES.forEach(([label, globalName]) => {
-                const source = window[globalName];
-                if (!source || typeof source !== 'object') return;
-                const flat = flattenNumeric(source, globalName);
-                Object.assign(pricingDefaults, flat);
-                categories.push([label, flat]);
-            });
 
             try {
-                const response = await fetch(`${API_BASE}/api/pricing-overrides`);
-                if (!response.ok) throw new Error('Could not load saved overrides');
-                const records = await response.json();
-                pricingOverrides = {};
-                records.forEach(record => {
-                    pricingOverrides[record.path] = Number(record.value);
+                const response = await fetch(`${API_BASE}/api/pricing`, { cache: 'no-store' });
+                const data = await response.json().catch(() => ({}));
+                if (!response.ok || !data.pricing) {
+                    throw new Error(data.error || data.msg || 'Could not load MongoDB pricing catalog');
+                }
+
+                // Keep a deep copy of the authoritative MongoDB catalog. Inputs are
+                // generated from this object, not from pricing-v3.js defaults.
+                window.SFP_ADMIN_PRICING_CATALOG = JSON.parse(JSON.stringify(data.pricing));
+                const catalog = window.SFP_ADMIN_PRICING_CATALOG;
+                const categories = [];
+
+                const minimums = flattenNumeric(catalog.SFP_PRICING_CONFIG || {}, 'SFP_PRICING_CONFIG');
+                Object.assign(pricingDefaults, minimums);
+                categories.push(['Production Minimums', minimums]);
+
+                PRICING_SOURCES.forEach(([label, globalName]) => {
+                    const source = catalog[globalName];
+                    if (!source || typeof source !== 'object') return;
+                    const flat = flattenNumeric(source, globalName);
+                    Object.assign(pricingDefaults, flat);
+                    categories.push([label, flat]);
                 });
-            } catch (error) {
-                pricingOverrides = {};
-                pricingStatus('Defaults loaded, but MongoDB overrides could not be loaded.', false);
-            }
 
-            editor.innerHTML = categories.map(([category, fields]) => {
-                const entries = Object.entries(fields);
-                if (!entries.length) return '';
+                editor.innerHTML = categories.map(([category, fields]) => {
+                    const entries = Object.entries(fields);
+                    if (!entries.length) return '';
 
-                const grouped = {};
-                entries.forEach(([path, defaultValue]) => {
-                    const product = productFromPath(path);
-                    (grouped[product] ||= []).push([path, defaultValue]);
-                });
+                    const grouped = {};
+                    entries.forEach(([path, currentValue]) => {
+                        const product = productFromPath(path);
+                        (grouped[product] ||= []).push([path, currentValue]);
+                    });
 
-                // Keep all production minimums together in one compact grid.
-                if (category === 'Production Minimums') {
+                    if (category === 'Production Minimums') {
+                        return `
+                            <div class="border border-gray-100 rounded-[2rem] overflow-hidden">
+                                <div class="bg-black text-white px-6 py-5">
+                                    <h2 class="font-black uppercase italic tracking-wide">${category}</h2>
+                                </div>
+                                <div class="p-5 md:p-7">
+                                    <div class="grid grid-cols-1 sm:grid-cols-2 xl:grid-cols-4 gap-4">
+                                        ${entries.map(([path, currentValue]) => {
+                                            const product = productFromPath(path);
+                                            const cardTitle = product === 'GENERAL' ? 'GENERAL' : product;
+                                            return `
+                                                <label class="block bg-gray-50 rounded-2xl p-4 border border-gray-100">
+                                                    <span class="block text-[10px] font-black uppercase italic text-black mb-3">${cardTitle}</span>
+                                                    <span class="block text-[8px] font-black uppercase text-gray-400 mb-2">Minimum Order</span>
+                                                    <div class="flex items-center gap-2">
+                                                        <span class="font-black">$</span>
+                                                        <input type="number" min="0" step="0.01"
+                                                            data-pricing-path="${path}" value="${currentValue}"
+                                                            class="w-full bg-white border rounded-xl px-3 py-2 text-sm font-black outline-none focus:border-black">
+                                                    </div>
+                                                    <div class="mt-2 text-[8px] uppercase font-bold text-gray-400">MongoDB: $${Number(currentValue).toFixed(2)}</div>
+                                                </label>`;
+                                        }).join('')}
+                                    </div>
+                                </div>
+                            </div>`;
+                    }
+
                     return `
                         <div class="border border-gray-100 rounded-[2rem] overflow-hidden">
                             <div class="bg-black text-white px-6 py-5">
                                 <h2 class="font-black uppercase italic tracking-wide">${category}</h2>
                             </div>
-                            <div class="p-5 md:p-7">
-                                <div class="grid grid-cols-1 sm:grid-cols-2 xl:grid-cols-4 gap-4">
-                                    ${entries.map(([path, defaultValue]) => {
-                                        const current = Object.prototype.hasOwnProperty.call(pricingOverrides, path)
-                                            ? pricingOverrides[path]
-                                            : defaultValue;
-                                        const overridden = Object.prototype.hasOwnProperty.call(pricingOverrides, path);
-                                        const product = productFromPath(path);
-                                        const cardTitle = product === 'GENERAL' ? 'GENERAL' : product;
-                                        return `
-                                            <label class="block bg-gray-50 rounded-2xl p-4 border ${overridden ? 'border-red-200' : 'border-gray-100'}">
-                                                <span class="block text-[10px] font-black uppercase italic text-black mb-3">${cardTitle}</span>
-                                                <span class="block text-[8px] font-black uppercase text-gray-400 mb-2">Minimum Order</span>
-                                                <div class="flex items-center gap-2">
-                                                    <span class="font-black">$</span>
-                                                    <input
-                                                        type="number"
-                                                        min="0"
-                                                        step="0.01"
-                                                        data-pricing-path="${path}"
-                                                        data-default="${defaultValue}"
-                                                        value="${current}"
-                                                        class="w-full bg-white border rounded-xl px-3 py-2 text-sm font-black outline-none focus:border-black">
-                                                </div>
-                                                <div class="mt-2 text-[8px] uppercase font-bold text-gray-400">
-                                                    Default: $${Number(defaultValue).toFixed(2)}
-                                                    ${overridden ? '<span class="text-red-600 ml-2">MongoDB override</span>' : ''}
-                                                </div>
-                                            </label>
-                                        `;
-                                    }).join('')}
-                                </div>
+                            <div class="p-5 md:p-7 space-y-6">
+                                ${Object.entries(grouped).map(([product, productFields]) => `
+                                    <div class="border-b border-gray-100 pb-6 last:border-0">
+                                        <h3 class="text-xs font-black uppercase italic mb-4">${product}</h3>
+                                        ${(() => {
+                                            const optionGroups = {};
+                                            productFields.forEach(field => {
+                                                const group = groupFromPath(field[0]);
+                                                (optionGroups[group] ||= []).push(field);
+                                            });
+                                            return Object.entries(optionGroups).map(([group, groupFields]) => `
+                                                <div class="mb-5 last:mb-0">
+                                                    <div class="text-[9px] font-black uppercase tracking-widest text-red-600 mb-3">${group}</div>
+                                                    <div class="grid grid-cols-1 sm:grid-cols-2 xl:grid-cols-3 gap-4">
+                                                        ${groupFields.map(([path, currentValue]) => {
+                                                            const prefix = valuePrefix(path);
+                                                            return `
+                                                                <label class="block bg-gray-50 rounded-2xl p-4 border border-gray-100">
+                                                                    <span class="block text-[9px] font-black uppercase text-gray-500 mb-2">${labelFromPath(path)}</span>
+                                                                    <div class="flex items-center gap-2">
+                                                                        <span class="font-black">${prefix}</span>
+                                                                        <input type="number" min="0" step="0.01"
+                                                                            data-pricing-path="${path}" value="${currentValue}"
+                                                                            class="w-full bg-white border rounded-xl px-3 py-2 text-sm font-black outline-none focus:border-black">
+                                                                    </div>
+                                                                    <div class="mt-2 text-[8px] uppercase font-bold text-gray-400">MongoDB: ${prefix}${Number(currentValue).toFixed(2)}</div>
+                                                                </label>`;
+                                                        }).join('')}
+                                                    </div>
+                                                </div>`).join('');
+                                        })()}
+                                    </div>`).join('')}
                             </div>
-                        </div>
-                    `;
-                }
-
-                return `
-                    <div class="border border-gray-100 rounded-[2rem] overflow-hidden">
-                        <div class="bg-black text-white px-6 py-5">
-                            <h2 class="font-black uppercase italic tracking-wide">${category}</h2>
-                        </div>
-                        <div class="p-5 md:p-7 space-y-6">
-                            ${Object.entries(grouped).map(([product, productFields]) => `
-                                <div class="border-b border-gray-100 pb-6 last:border-0">
-                                    <h3 class="text-xs font-black uppercase italic mb-4">${product}</h3>
-                                    ${(() => {
-                                        const optionGroups = {};
-                                        productFields.forEach(field => {
-                                            const group = groupFromPath(field[0]);
-                                            (optionGroups[group] ||= []).push(field);
-                                        });
-
-                                        return Object.entries(optionGroups).map(([group, groupFields]) => `
-                                            <div class="mb-5 last:mb-0">
-                                                <div class="text-[9px] font-black uppercase tracking-widest text-red-600 mb-3">${group}</div>
-                                                <div class="grid grid-cols-1 sm:grid-cols-2 xl:grid-cols-3 gap-4">
-                                                    ${groupFields.map(([path, defaultValue]) => {
-                                                        const current = Object.prototype.hasOwnProperty.call(pricingOverrides, path)
-                                                            ? pricingOverrides[path]
-                                                            : defaultValue;
-                                                        const overridden = Object.prototype.hasOwnProperty.call(pricingOverrides, path);
-                                                        const prefix = valuePrefix(path);
-                                                        return `
-                                                            <label class="block bg-gray-50 rounded-2xl p-4 border ${overridden ? 'border-red-200' : 'border-gray-100'}">
-                                                                <span class="block text-[9px] font-black uppercase text-gray-500 mb-2">${labelFromPath(path)}</span>
-                                                                <div class="flex items-center gap-2">
-                                                                    <span class="font-black">${prefix}</span>
-                                                                    <input
-                                                                        type="number"
-                                                                        min="0"
-                                                                        step="0.01"
-                                                                        data-pricing-path="${path}"
-                                                                        data-default="${defaultValue}"
-                                                                        value="${current}"
-                                                                        class="w-full bg-white border rounded-xl px-3 py-2 text-sm font-black outline-none focus:border-black">
-                                                                </div>
-                                                                <div class="mt-2 text-[8px] uppercase font-bold text-gray-400">
-                                                                    Default: ${prefix}${Number(defaultValue).toFixed(2)}
-                                                                    ${overridden ? '<span class="text-red-600 ml-2">MongoDB override</span>' : ''}
-                                                                </div>
-                                                            </label>
-                                                        `;
-                                                    }).join('')}
-                                                </div>
-                                            </div>
-                                        `).join('');
-                                    })()}
-                                </div>
-                            `).join('')}
-                        </div>
-                    </div>
-                `;
-            }).join('');
-        }
-
-
-        async function migratePricingToMongoDB() {
-            if (!confirm('Initialize the full MongoDB pricing catalog now? This is a one-time migration and will preserve your existing pricing overrides.')) return;
-            const token = localStorage.getItem('token');
-            pricingStatus('Migrating pricing to MongoDB...');
-            try {
-                const response = await fetch(`${API_BASE}/api/admin/migrate-pricing`, {
-                    method: 'POST',
-                    headers: { 'x-auth-token': token }
-                });
-                const data = await response.json().catch(() => ({}));
-                if (!response.ok) throw new Error(data.msg || data.error || 'Pricing migration failed');
-                pricingStatus(`MongoDB pricing initialized: ${data.sources} source(s), ${data.overridesApplied}/${data.overridesFound} override(s) applied.`);
+                        </div>`;
+                }).join('');
             } catch (error) {
+                editor.innerHTML = '<div class="text-red-600 font-bold text-sm">Could not load pricing from MongoDB.</div>';
                 pricingStatus(error.message, false);
             }
         }
 
+        function setCatalogValue(root, segments, value) {
+            let target = root;
+            for (let i = 0; i < segments.length - 1; i++) {
+                const key = segments[i];
+                if (!target[key] || typeof target[key] !== 'object') target[key] = {};
+                target = target[key];
+            }
+            target[segments[segments.length - 1]] = value;
+        }
+
         async function savePricing() {
             const token = localStorage.getItem('token');
+            const baseCatalog = window.SFP_ADMIN_PRICING_CATALOG;
+            if (!baseCatalog) {
+                pricingStatus('MongoDB pricing catalog is not loaded.', false);
+                return;
+            }
+
+            const pricing = JSON.parse(JSON.stringify(baseCatalog));
             const inputs = [...document.querySelectorAll('[data-pricing-path]')];
+            let changed = 0;
 
-            const values = inputs
-                .map(input => ({
-                    path: input.dataset.pricingPath,
-                    value: Number(input.value)
-                }))
-                .filter(item => Number.isFinite(item.value) && item.value >= 0);
+            for (const input of inputs) {
+                const value = Number(input.value);
+                if (!Number.isFinite(value) || value < 0) {
+                    pricingStatus(`Invalid value for ${labelFromPath(input.dataset.pricingPath)}.`, false);
+                    input.focus();
+                    return;
+                }
+                const path = input.dataset.pricingPath;
+                if (value !== Number(pricingDefaults[path])) changed++;
+                setCatalogValue(pricing, pathSegments(path), value);
+            }
 
-            const changes = values.filter(item =>
-                item.value !== Number(pricingDefaults[item.path])
-            );
-
-            const resets = values.filter(item =>
-                item.value === Number(pricingDefaults[item.path]) &&
-                Object.prototype.hasOwnProperty.call(pricingOverrides, item.path)
-            );
-
-            if (!changes.length && !resets.length) {
+            if (!changed) {
                 pricingStatus('No pricing changes to save.');
                 return;
             }
 
+            pricingStatus('Saving pricing directly to MongoDB...');
             try {
-                let saved = 0;
-                let reset = 0;
-
-                if (changes.length) {
-                    const response = await fetch(`${API_BASE}/api/admin/pricing-overrides`, {
-                        method: 'PUT',
-                        headers: {
-                            'Content-Type': 'application/json',
-                            'x-auth-token': token
-                        },
-                        body: JSON.stringify({ changes })
-                    });
-                    const data = await response.json();
-                    if (!response.ok) throw new Error(data.msg || data.error || 'Save failed');
-                    saved = data.saved || 0;
-                }
-
-                for (const item of resets) {
-                    const response = await fetch(
-                        `${API_BASE}/api/admin/pricing-overrides/${encodeURIComponent(item.path)}`,
-                        {
-                            method: 'DELETE',
-                            headers: { 'x-auth-token': token }
-                        }
-                    );
-                    if (!response.ok) {
-                        const data = await response.json().catch(() => ({}));
-                        throw new Error(data.msg || data.error || `Could not reset ${item.path}`);
-                    }
-                    reset++;
-                }
-
-                pricingStatus(`${saved} override(s) saved. ${reset} field(s) reset to pricing.js defaults.`);
+                const response = await fetch(`${API_BASE}/api/admin/pricing`, {
+                    method: 'PUT',
+                    headers: {
+                        'Content-Type': 'application/json',
+                        'x-auth-token': token
+                    },
+                    body: JSON.stringify({ pricing })
+                });
+                const data = await response.json().catch(() => ({}));
+                if (!response.ok) throw new Error(data.msg || data.error || 'Save failed');
+                pricingStatus(`${changed} pricing field(s) saved directly to MongoDB.`);
                 await loadPricingEditor();
             } catch (error) {
                 pricingStatus(error.message, false);
@@ -879,21 +824,9 @@
         }
 
         async function resetAllPricing() {
-            if (!confirm('Reset every saved pricing override back to pricing.js defaults?')) return;
-            const token = localStorage.getItem('token');
-
-            try {
-                const response = await fetch(`${API_BASE}/api/admin/pricing-overrides`, {
-                    method: 'DELETE',
-                    headers: { 'x-auth-token': token }
-                });
-                const data = await response.json();
-                if (!response.ok) throw new Error(data.msg || data.error || 'Reset failed');
-                pricingStatus('All MongoDB pricing overrides were removed.');
-                await loadPricingEditor();
-            } catch (error) {
-                pricingStatus(error.message, false);
-            }
+            // MongoDB is authoritative now: this discards only unsaved edits.
+            await loadPricingEditor();
+            pricingStatus('Unsaved changes discarded. Reloaded current MongoDB pricing.');
         }
 
 

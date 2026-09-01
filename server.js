@@ -1121,7 +1121,56 @@ app.get('/api/pricing', async (req, res) => {
     }
 });
 
-// Public read endpoint. The storefront will use this in the next step.
+// Admin write endpoint for the authoritative MongoDB pricing catalog.
+// The admin editor sends the complete pricing object so keys such as "3.00"
+// are preserved exactly and are not interpreted as MongoDB dotted paths.
+app.put('/api/admin/pricing', authMiddleware, async (req, res) => {
+    try {
+        if (req.user.role !== 'admin') {
+            return res.status(403).json({ msg: 'Forbidden' });
+        }
+
+        const pricing = req.body?.pricing;
+        if (!pricing || typeof pricing !== 'object' || Array.isArray(pricing)) {
+            return res.status(400).json({ msg: 'A complete pricing object is required.' });
+        }
+
+        const validatePricing = (value, path = 'pricing') => {
+            if (typeof value === 'number') {
+                if (!Number.isFinite(value) || value < 0) {
+                    throw new Error(`Invalid numeric value at ${path}`);
+                }
+                return;
+            }
+            if (Array.isArray(value)) {
+                value.forEach((item, index) => validatePricing(item, `${path}[${index}]`));
+                return;
+            }
+            if (value && typeof value === 'object') {
+                Object.entries(value).forEach(([key, child]) => validatePricing(child, `${path}.${key}`));
+            }
+        };
+
+        validatePricing(pricing);
+
+        const catalog = await PricingCatalog.findOneAndUpdate(
+            { key: 'storefront' },
+            { $set: { pricing, updatedAt: new Date() } },
+            { new: true, upsert: false, runValidators: true }
+        ).lean();
+
+        if (!catalog) {
+            return res.status(404).json({ msg: 'Pricing catalog has not been initialized.' });
+        }
+
+        res.set('Cache-Control', 'no-store');
+        res.json({ success: true, pricing: catalog.pricing, updatedAt: catalog.updatedAt });
+    } catch (error) {
+        res.status(500).json({ error: error.message });
+    }
+});
+
+// Legacy override endpoints are kept temporarily for backward compatibility.
 app.get('/api/pricing-overrides', async (req, res) => {
     try {
         const records = await PricingOverride.find().sort({ path: 1 }).lean();
