@@ -129,20 +129,14 @@
                             </div>
                         </section>
 
-                        <section class="space-y-8">
-                            <h2 class="heavy-italic text-2xl mb-2 flex items-center gap-3 text-black"><i data-lucide="credit-card" class="text-red-600"></i> Payment Method</h2>
-                            <div class="grid grid-cols-1 gap-4">
-                                <div onclick="selectPayment('card')" id="pay-card" class="select-button payment-button p-6 rounded-[1.5rem] flex flex-col items-center gap-2">
-                                    <i data-lucide="credit-card"></i><span class="heavy-italic text-[10px]">Credit / Debit Card</span>
-                                </div>
-                            </div>
-                            <div id="card-details" class="hidden bg-gray-50 p-8 rounded-[2.5rem] border border-gray-100 space-y-4">
+                        <section class="space-y-4">
+                            <div class="bg-gray-50 p-8 rounded-[2.5rem] border border-gray-100 space-y-4">
                                 <div class="flex items-start gap-3">
                                     <i data-lucide="shield-check" class="text-red-600 shrink-0"></i>
                                     <div>
-                                        <p class="text-sm font-black uppercase italic">Credit / Debit Card</p>
+                                        <p class="text-sm font-black uppercase italic">Secure Card Payment</p>
                                         <p class="text-[10px] font-bold uppercase text-gray-400 mt-2 leading-relaxed">
-                                            Secure card payment powered by Stripe. Your card information is entered securely on Stripe and is never stored by this website.
+                                            Credit/debit card payment powered by Stripe. Your card information is entered securely on Stripe and is never stored by this website.
                                         </p>
                                     </div>
                                 </div>
@@ -174,7 +168,7 @@
                                 </div>
 
                                 <button onclick="validateAndPlaceOrder()" id="place-order-btn" class="w-full bg-red-600 hover:bg-black text-white font-black py-6 rounded-2xl text-[12px] uppercase tracking-[0.3em] italic transition-all shadow-xl">
-                                    Place Order Now
+                                    Pay Securely With Card
                                 </button>
                             </div>
                         </div>
@@ -194,7 +188,7 @@
     <script>
         if (window.lucide && typeof window.lucide.createIcons === 'function') window.lucide.createIcons();
         let mongoDatabaseId = null; 
-        let currentMethod = 'pickup', currentPayment = '';
+        let currentMethod = 'pickup', currentPayment = 'card';
 
         const FLAT_SHIPPING_FEE = 25;
         const FLAT_SHIPPING_SERVICE = { serviceName: 'Flat Rate Shipping', amount: FLAT_SHIPPING_FEE };
@@ -235,15 +229,6 @@
                 postalCode: document.getElementById('stateZip').value.trim(),
                 countryCode: 'US'
             };
-        }
-
-        function selectPayment(method) {
-            currentPayment = method;
-            document.querySelectorAll('.payment-button').forEach(btn => btn.classList.remove('active'));
-            const target = document.getElementById('pay-' + method);
-            if (target) target.classList.add('active');
-            document.getElementById('card-details').classList.toggle('hidden', method !== 'card');
-            document.getElementById('place-order-btn').innerText = method === 'card' ? 'Pay Securely With Card' : 'Place Order Now';
         }
 
         function formatExpiry(el) {
@@ -540,11 +525,6 @@ async function prepareOrderItems(cart, orderNumber) {
 
             if (!name || !email) {
                 alert("Please fill in contact information");
-                return;
-            }
-
-            if (!currentPayment) {
-                alert('Please select a payment method.');
                 return;
             }
 
