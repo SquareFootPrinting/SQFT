@@ -1994,6 +1994,24 @@ const amount = Math.round(numericTotal * 100);
             }
 
 
+            const frontendUrl = String(process.env.FRONTEND_URL || '')
+                .trim()
+                .replace(/\/+$/, '');
+
+            if (!frontendUrl) {
+
+                return res
+                    .status(500)
+                    .json({
+
+                        success: false,
+
+                        error:
+                            'FRONTEND_URL is not configured'
+                    });
+            }
+
+
             const session =
                 await stripe
                     .checkout
@@ -2048,10 +2066,10 @@ const amount = Math.round(numericTotal * 100);
                         },
 
                         success_url:
-                            'https://sqftprinting.com/order-confirmation.html?stripe_session={CHECKOUT_SESSION_ID}',
+                            `${frontendUrl}/order-confirmation.html?stripe_session={CHECKOUT_SESSION_ID}`,
 
                         cancel_url:
-                            'https://sqftprinting.com/checkout.html?payment=cancelled'
+                            `${frontendUrl}/checkout.html?payment=cancelled`
                     });
 
 
