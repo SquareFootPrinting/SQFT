@@ -1,5 +1,5 @@
 {
-  "name": "ft",
+  "name": "sqft",
   "version": "1.0.0",
   "description": "Square Foot Printing Server",
   "main": "server.js",
@@ -9,7 +9,7 @@
   },
   "repository": {
     "type": "git",
-    "url": "git+https://github.com/Pulopez22/FT.git"
+    "url": "git+https://github.com/SquareFootPrinting/SQFT.git"
   },
   "keywords": [],
   "author": "",

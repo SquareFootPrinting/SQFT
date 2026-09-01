@@ -327,6 +327,18 @@
     </div>
 `).join('') : ''}
                             </div>
+                            <div class="mt-6 grid grid-cols-1 md:grid-cols-2 gap-4 text-[10px] font-bold uppercase text-gray-600">
+                                <div class="bg-white border border-gray-100 rounded-2xl p-4">
+                                    <div><b>Payment:</b> ${order.payment_method || '—'} / ${order.payment_status || 'Pending'}</div>
+                                    <div class="mt-2"><b>Transaction:</b> ${order.transaction_id || '—'}</div>
+                                    <div class="mt-2"><b>Delivery:</b> ${order.delivery_method || 'pickup'}</div>
+                                    <div class="mt-2"><b>Shipping:</b> $${parseMoney(order.shipping_cost).toFixed(2)} ${order.shipping_service?.serviceName ? `— ${order.shipping_service.serviceName}` : ''}</div>
+                                </div>
+                                <div class="bg-white border border-gray-100 rounded-2xl p-4">
+                                    <div><b>Ship to:</b> ${formatShippingAddress(order.shipping_address)}</div>
+                                    <div class="mt-3 flex gap-2"><input id="tracking-${order._id}" value="${order.tracking_number || ''}" placeholder="UPS tracking number" class="flex-grow border rounded-xl px-3 py-2 normal-case"><button onclick="event.stopPropagation(); saveTracking('${order._id}')" class="bg-black text-white rounded-xl px-3 py-2">Save Tracking</button></div>
+                                </div>
+                            </div>
                             <div class="mt-6 pt-5 border-t border-gray-200 flex flex-wrap gap-3">
                                 <a href="mailto:${order.customer_email || ''}" class="quick-action bg-black text-white hover:bg-red-600">Email Customer</a>
                                 ${order.customer_phone ? `<a href="tel:${order.customer_phone}" class="quick-action border border-black text-black hover:bg-black hover:text-white">Call Customer</a>` : ''}
@@ -445,6 +457,22 @@
 
         function escapePrint(value) {
             return String(value ?? '').replace(/[&<>"']/g, ch => ({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;',"'":'&#039;'}[ch]));
+        }
+
+        function formatShippingAddress(address) {
+            if (!address) return 'Local Pickup';
+            return [address.street, address.street2, address.city, address.state, address.postalCode].filter(Boolean).join(', ');
+        }
+
+        async function saveTracking(orderId) {
+            const token = localStorage.getItem('token');
+            const input = document.getElementById(`tracking-${orderId}`);
+            const res = await fetch(`https://ft-f34l.onrender.com/api/admin/orders/${orderId}/tracking`, { method:'PATCH', headers:{'Content-Type':'application/json','x-auth-token':token}, body:JSON.stringify({ tracking_number:input?.value || '', carrier:'UPS' }) });
+            const payload = await res.json().catch(()=>({}));
+            if (!res.ok) return alert(payload.error || 'Could not save tracking');
+            window.adminOrdersById[orderId] = payload;
+            alert('Tracking saved.');
+            fetchOrders();
         }
 
         function printOrder(orderId) {

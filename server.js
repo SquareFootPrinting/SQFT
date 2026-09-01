@@ -2,34 +2,7 @@ require('dotenv').config();
 
 const fs = require('fs');
 const path = require('path');
-const net = require('net');
-
-const mongoTestHost =
-  'ac-ercnu4d-shard-00-00.lce6y98.mongodb.net';
-
-const mongoTest = net.createConnection({
-    host: mongoTestHost,
-    port: 27017,
-    timeout: 10000
-});
-
-mongoTest.on('connect', () => {
-    console.log('✅ MongoDB TCP 27017 reachable from GoDaddy');
-    mongoTest.destroy();
-});
-
-mongoTest.on('timeout', () => {
-    console.log('❌ MongoDB TCP 27017 TIMEOUT from GoDaddy');
-    mongoTest.destroy();
-});
-
-mongoTest.on('error', (err) => {
-    console.log(
-        '❌ MongoDB TCP connection error:',
-        err.code,
-        err.message
-    );
-});
+const crypto = require('crypto');
 
 const express = require('express');
 const mongoose = require('mongoose');
@@ -47,7 +20,11 @@ const stripe = require('stripe')(process.env.STRIPE_SECRET_KEY);
 // PAYPAL
 // -----------------------------------------------------
 
-let environment = new paypal.core.SandboxEnvironment(
+const PayPalEnvironment = String(process.env.PAYPAL_MODE || 'sandbox').toLowerCase() === 'live'
+    ? paypal.core.LiveEnvironment
+    : paypal.core.SandboxEnvironment;
+
+let environment = new PayPalEnvironment(
     process.env.PAYPAL_CLIENT_ID,
     process.env.PAYPAL_SECRET
 );
@@ -153,6 +130,15 @@ const Order = mongoose.model(
         customer_email: String,
 
         customer_phone: String,
+
+        delivery_method: { type: String, default: 'pickup' },
+        shipping_address: { type: mongoose.Schema.Types.Mixed, default: null },
+        shipping_service: { type: mongoose.Schema.Types.Mixed, default: null },
+        shipping_cost: { type: Number, default: 0 },
+        payment_method: { type: String, default: '' },
+        zelle_reference: { type: String, default: '' },
+        tracking_number: { type: String, default: '' },
+        carrier: { type: String, default: '' },
 
         total_price: String,
 
@@ -908,6 +894,120 @@ app.post(
 
 
 // -----------------------------------------------------
+// ORDER TOTAL + SHIPPING HELPERS
+// -----------------------------------------------------
+
+function moneyNumber(value) {
+    const n = Number(String(value ?? 0).replace(/[$,]/g, ''));
+    return Number.isFinite(n) ? n : 0;
+}
+
+async function calculateServerOrderTotal(items = [], shippingCost = 0) {
+    const catalog = await PricingCatalog.findOne({ key: 'storefront' }).lean();
+    const productionTypes = catalog?.pricing?.SFP_PRICING_CONFIG?.productionTypes || {};
+    const defaultMinimum = Number(catalog?.pricing?.SFP_PRICING_CONFIG?.defaultMinimumOrder || 50);
+    const totals = {};
+    const minimums = {};
+
+    for (const item of Array.isArray(items) ? items : []) {
+        const key = String(item.productionType || item.productId || item.name || 'other');
+        const linePrice = moneyNumber(item.price);
+        if (linePrice < 0) throw new Error('Invalid item price');
+        totals[key] = (totals[key] || 0) + linePrice;
+        minimums[key] = Math.max(minimums[key] || 0, Number(productionTypes?.[key]?.minimumOrder ?? item.minOrder ?? defaultMinimum));
+    }
+
+    const subtotal = Object.keys(totals).reduce((sum, key) => sum + Math.max(totals[key], minimums[key] || 0), 0);
+    return { subtotal: Number(subtotal.toFixed(2)), total: Number((subtotal + Number(shippingCost || 0)).toFixed(2)) };
+}
+
+function signShippingRate(payload) {
+    const secret = process.env.SHIPPING_QUOTE_SECRET || process.env.JWT_SECRET || process.env.STRIPE_WEBHOOK_SECRET;
+    if (!secret) throw new Error('SHIPPING_QUOTE_SECRET is not configured');
+    const body = Buffer.from(JSON.stringify(payload)).toString('base64url');
+    const sig = crypto.createHmac('sha256', secret).update(body).digest('base64url');
+    return `${body}.${sig}`;
+}
+
+function verifyShippingRate(token) {
+    const secret = process.env.SHIPPING_QUOTE_SECRET || process.env.JWT_SECRET || process.env.STRIPE_WEBHOOK_SECRET;
+    if (!secret || !token) return null;
+    const [body, sig] = String(token).split('.');
+    if (!body || !sig) return null;
+    const expected = crypto.createHmac('sha256', secret).update(body).digest('base64url');
+    if (sig.length !== expected.length || !crypto.timingSafeEqual(Buffer.from(sig), Buffer.from(expected))) return null;
+    const payload = JSON.parse(Buffer.from(body, 'base64url').toString('utf8'));
+    if (!payload.expiresAt || Date.now() > payload.expiresAt) return null;
+    return payload;
+}
+
+async function getUpsAccessToken() {
+    const clientId = process.env.UPS_CLIENT_ID;
+    const clientSecret = process.env.UPS_CLIENT_SECRET;
+    if (!clientId || !clientSecret) throw new Error('UPS credentials are not configured');
+    const base = String(process.env.UPS_ENV || 'production').toLowerCase() === 'sandbox'
+        ? 'https://wwwcie.ups.com'
+        : 'https://onlinetools.ups.com';
+    const response = await fetch(`${base}/security/v1/oauth/token`, {
+        method: 'POST',
+        headers: {
+            Authorization: `Basic ${Buffer.from(`${clientId}:${clientSecret}`).toString('base64')}`,
+            'Content-Type': 'application/x-www-form-urlencoded'
+        },
+        body: 'grant_type=client_credentials'
+    });
+    const data = await response.json();
+    if (!response.ok || !data.access_token) throw new Error(data.response?.errors?.[0]?.message || 'UPS authentication failed');
+    return { token: data.access_token, base };
+}
+
+app.post('/api/shipping/ups-rates', async (req, res) => {
+    try {
+        const address = req.body?.address || {};
+        if (!address.city || !address.state || !address.postalCode) return res.status(400).json({ error: 'Complete shipping address required' });
+        const { token, base } = await getUpsAccessToken();
+        const weight = Math.max(1, Math.min(150, Number(req.body?.package?.weight || process.env.UPS_DEFAULT_WEIGHT_LBS || 5)));
+        const requestBody = {
+            RateRequest: {
+                Request: { TransactionReference: { CustomerContext: 'SFP checkout' } },
+                Shipment: {
+                    Shipper: { ShipperNumber: process.env.UPS_ACCOUNT_NUMBER || undefined, Address: { PostalCode: process.env.UPS_ORIGIN_ZIP || '89118', CountryCode: 'US' } },
+                    ShipTo: { Address: { AddressLine: [address.street, address.street2].filter(Boolean), City: address.city, StateProvinceCode: address.state, PostalCode: address.postalCode, CountryCode: address.countryCode || 'US' } },
+                    ShipFrom: { Address: { PostalCode: process.env.UPS_ORIGIN_ZIP || '89118', CountryCode: 'US' } },
+                    Package: [{ PackagingType: { Code: '02' }, PackageWeight: { UnitOfMeasurement: { Code: 'LBS' }, Weight: String(weight) } }]
+                }
+            }
+        };
+        const response = await fetch(`${base}/api/rating/v2409/Shop`, { method:'POST', headers:{ Authorization:`Bearer ${token}`, 'Content-Type':'application/json', transId: crypto.randomUUID(), transactionSrc:'SFP' }, body:JSON.stringify(requestBody) });
+        const data = await response.json();
+        if (!response.ok) throw new Error(data.response?.errors?.[0]?.message || 'UPS rating failed');
+        const rows = data?.RateResponse?.RatedShipment || [];
+        const names = { '03':'UPS Ground', '01':'UPS Next Day Air', '02':'UPS 2nd Day Air', '12':'UPS 3 Day Select', '13':'UPS Next Day Air Saver', '14':'UPS Next Day Air Early', '59':'UPS 2nd Day Air A.M.' };
+        const rates = rows.map(row => {
+            const serviceCode = String(row.Service?.Code || '');
+            const amount = Number(row.TotalCharges?.MonetaryValue || 0);
+            const quote = { serviceCode, serviceName:names[serviceCode] || `UPS ${serviceCode}`, amount, currency:row.TotalCharges?.CurrencyCode || 'USD', expiresAt:Date.now()+15*60*1000 };
+            return { ...quote, quoteToken: signShippingRate(quote) };
+        }).filter(r => Number.isFinite(r.amount) && r.amount >= 0);
+        res.json({ rates });
+    } catch (error) {
+        console.error('UPS rate error:', error.message);
+        res.status(503).json({ error: error.message });
+    }
+});
+
+app.get('/api/checkout/config', (req, res) => {
+    res.json({
+        zelle: {
+            enabled: Boolean(process.env.ZELLE_RECIPIENT),
+            recipientName: process.env.ZELLE_RECIPIENT_NAME || 'Square Foot Printing',
+            recipient: process.env.ZELLE_RECIPIENT || '',
+            qrUrl: process.env.ZELLE_QR_URL || ''
+        }
+    });
+});
+
+// -----------------------------------------------------
 // CREAR ORDEN
 // -----------------------------------------------------
 
@@ -921,6 +1021,21 @@ app.post(
             const orderData =
                 req.body;
 
+
+            let shippingCost = 0;
+            let shippingService = null;
+            if (orderData.delivery_method === 'shipping') {
+                const verifiedRate = verifyShippingRate(orderData.shipping_service?.quoteToken);
+                if (!verifiedRate) return res.status(400).json({ success:false, error:'Shipping rate expired or invalid. Please get UPS rates again.' });
+                shippingCost = Number(verifiedRate.amount);
+                shippingService = verifiedRate;
+            }
+
+            const calculated = await calculateServerOrderTotal(orderData.order_items, shippingCost);
+            const clientTotal = moneyNumber(orderData.total_price);
+            if (Math.abs(clientTotal - calculated.total) > 0.01) {
+                return res.status(409).json({ success:false, error:'Order total changed. Refresh checkout and try again.', serverTotal:calculated.total });
+            }
 
             const newOrder =
                 new Order({
@@ -937,8 +1052,15 @@ app.post(
                     customer_phone:
                         orderData.customer_phone,
 
+                    delivery_method: orderData.delivery_method || 'pickup',
+                    shipping_address: orderData.delivery_method === 'shipping' ? orderData.shipping_address : null,
+                    shipping_service: shippingService,
+                    shipping_cost: shippingCost,
+                    payment_method: orderData.payment_method || '',
+                    zelle_reference: orderData.zelle_reference || '',
+
                     total_price:
-                        orderData.total_price,
+                        `$${calculated.total.toFixed(2)}`,
 
                     order_items:
                         orderData.order_items,
@@ -963,7 +1085,7 @@ app.post(
                         '"SFP Orders" <ventas@sfp-lasvegas.com>',
 
                     to:
-                        'za19012245@zapopan.tecmm.edu.mx',
+                        process.env.ORDER_NOTIFICATION_EMAIL || 'ventas@sfp-lasvegas.com',
 
                     subject:
                         `New Order: ${orderData.order_id}`,
@@ -1513,6 +1635,18 @@ app.post(
 );
 
 
+
+app.patch('/api/admin/orders/:id/tracking', authMiddleware, async (req, res) => {
+    try {
+        if (req.user.role !== 'admin') return res.status(403).json({ msg:'No autorizado' });
+        const tracking_number = String(req.body.tracking_number || '').trim();
+        const carrier = String(req.body.carrier || 'UPS').trim();
+        const updated = await Order.findByIdAndUpdate(req.params.id, { tracking_number, carrier, ...(tracking_number ? { status:'Shipped' } : {}) }, { new:true });
+        if (!updated) return res.status(404).json({ error:'Order not found' });
+        res.json(updated);
+    } catch (error) { res.status(500).json({ error:error.message }); }
+});
+
 // -----------------------------------------------------
 // STRIPE - CREAR CHECKOUT SESSION
 // -----------------------------------------------------
@@ -1688,152 +1822,28 @@ const amount = Math.round(numericTotal * 100);
 
 app.post(
     '/api/checkout/create-paypal-order',
-
     async (req, res) => {
-
         try {
-
-            const {
-                items,
-                userEmail
-            } = req.body;
-
-
-            const user =
-                await User.findOne({
-
-                    email:
-                        userEmail
-                });
-
-
-            const isWholesale =
-                user
-                    ? user.isWholesale
-                    : false;
-
-
-            let totalAmount =
-                0;
-
-
-            for (
-                const item of items
-            ) {
-
-                const priceRecord =
-                    await Pricing.findOne({
-
-                        productId:
-                            item.productId,
-
-                        variantKey:
-                            item.variantKey ||
-                            'base'
-                    });
-
-
-                if (!priceRecord) {
-
-                    return res
-                        .status(403)
-                        .json({
-
-                            error:
-                                `Producto no autorizado: ${item.name}`
-                        });
-                }
-
-
-                let price =
-                    priceRecord.price;
-
-
-                if (
-                    priceRecord.type ===
-                    'sqft'
-                ) {
-
-                    price =
-                        price *
-                        (
-                            Math.max(
-                                1,
-                                item.width
-                            ) *
-                            Math.max(
-                                1,
-                                item.height
-                            )
-                        );
-                }
-
-
-                const finalPrice =
-                    isWholesale
-                        ? price
-                        : price * 2;
-
-
-                totalAmount +=
-                    finalPrice *
-                    (
-                        item.quantity ||
-                        1
-                    );
-            }
-
-
-            const request =
-                new paypal
-                    .orders
-                    .OrdersCreateRequest();
-
-
+            const { orderDatabaseId } = req.body;
+            if (!orderDatabaseId) return res.status(400).json({ error:'Missing order ID' });
+            const dbOrder = await Order.findById(orderDatabaseId);
+            if (!dbOrder) return res.status(404).json({ error:'Order not found' });
+            const totalAmount = moneyNumber(dbOrder.total_price);
+            if (!(totalAmount > 0)) return res.status(400).json({ error:'Invalid order total' });
+            const request = new paypal.orders.OrdersCreateRequest();
             request.requestBody({
-
-                intent:
-                    'CAPTURE',
-
-                purchase_units: [
-
-                    {
-
-                        amount: {
-
-                            currency_code:
-                                'USD',
-
-                            value:
-                                totalAmount
-                                    .toFixed(2)
-                        }
-                    }
-                ]
+                intent:'CAPTURE',
+                purchase_units:[{
+                    reference_id: dbOrder._id.toString(),
+                    custom_id: dbOrder.order_id || '',
+                    amount:{ currency_code:'USD', value:totalAmount.toFixed(2) }
+                }]
             });
-
-
-            const order =
-                await paypalClient
-                    .execute(request);
-
-
-            res.json({
-
-                id:
-                    order.result.id
-            });
-
-
+            const order = await paypalClient.execute(request);
+            res.json({ id:order.result.id });
         } catch (err) {
-
-            res
-                .status(500)
-                .json({
-
-                    error:
-                        err.message
-                });
+            console.error('PayPal create error:', err.message);
+            res.status(500).json({ error:err.message });
         }
     }
 );

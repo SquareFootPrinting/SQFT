@@ -241,9 +241,9 @@
 
         // ZELLE CONFIGURATION — fill these in when the company details are available.
         // Example recipient: phone number or email registered with the business Zelle account.
-        const ZELLE_RECIPIENT_NAME = '';
-        const ZELLE_RECIPIENT = '';
-        const ZELLE_QR_URL = '';
+        let ZELLE_RECIPIENT_NAME = '';
+        let ZELLE_RECIPIENT = '';
+        let ZELLE_QR_URL = '';
 
         let upsRates = [];
         let selectedUpsRate = null;
@@ -320,7 +320,8 @@
                     serviceName: String(rate.serviceName || rate.name || 'UPS Service'),
                     amount: Number(rate.amount ?? rate.price ?? rate.total ?? 0),
                     currency: String(rate.currency || 'USD'),
-                    estimatedDelivery: rate.estimatedDelivery || rate.deliveryDate || ''
+                    estimatedDelivery: rate.estimatedDelivery || rate.deliveryDate || '',
+                    quoteToken: String(rate.quoteToken || '')
                 })).filter(rate => Number.isFinite(rate.amount));
                 if (!upsRates.length) throw new Error('UPS returned no shipping services for this address.');
                 status.innerText = 'Select a UPS service';
@@ -460,6 +461,7 @@ function renderPayPalButtons() {
                         shipping_service: currentMethod === 'shipping' ? selectedUpsRate : null,
                         shipping_cost: currentMethod === 'shipping' ? currentShippingFee : 0,
                         total_price: totalVisible,
+                        payment_method: 'paypal',
                         payment_status: 'Pending'
                     })
                 });
@@ -470,13 +472,7 @@ function renderPayPalButtons() {
                 const paypalRes = await fetch('https://ft-f34l.onrender.com/api/checkout/create-paypal-order', {
                     method: 'POST',
                     headers: { 'Content-Type': 'application/json' },
-                    body: JSON.stringify({ 
-                        items: preparedItems,
-                        totalForzado: totalParaCobrar,
-                        deliveryMethod: currentMethod,
-                        shippingAddress: currentMethod === 'shipping' ? getShippingAddress() : null,
-                        shippingService: currentMethod === 'shipping' ? selectedUpsRate : null
-                    })
+                    body: JSON.stringify({ orderDatabaseId: resData.id })
                 });
 
                 if (!paypalRes.ok) throw new Error("PayPal logic error");
@@ -961,6 +957,14 @@ if (currentPayment === 'card') {
 
         window.onload = async () => {
             checkAuth();
+            try {
+                const configRes = await fetch('https://ft-f34l.onrender.com/api/checkout/config');
+                const config = await configRes.json();
+                ZELLE_RECIPIENT_NAME = config?.zelle?.recipientName || '';
+                ZELLE_RECIPIENT = config?.zelle?.recipient || '';
+                ZELLE_QR_URL = config?.zelle?.qrUrl || '';
+                renderZelleConfiguration();
+            } catch (e) { console.warn('Checkout config unavailable', e); }
 
             // Wait for MongoDB pricing overrides before calculating production minimums.
             if (window.SFP_PRICING_READY) {
