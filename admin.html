@@ -21,7 +21,6 @@
         .status-badge { padding: 4px 12px; font-size: 9px; font-weight: 900; text-transform: uppercase; border-radius: 20px; }
         .status-pending { background: #fef3c7; color: #b45309; }
         .status-paid { background: #ecfdf5; color: #047857; }
-        .status-processing { background: #ecfdf5; color: #047857; }
         .status-preflight { background: #eff6ff; color: #2563eb; }
         .status-printing { background: #f5f3ff; color: #7c3aed; }
         .status-finishing { background: #fdf4ff; color: #a21caf; }
@@ -187,9 +186,8 @@
                         <td>
                             <select data-order-status="${order._id}" onclick="event.stopPropagation()" onchange="event.stopPropagation(); updateStatus('${order._id}', this.value, this)" 
         class="status-badge ${getStatusClass(order.status)} outline-none cursor-pointer border-none bg-transparent font-black">
-    <option value="Pending" ${order.status === 'Pending' ? 'selected' : ''}>RECEIVED</option>
-    <option value="Paid" ${order.status === 'Paid' ? 'selected' : ''}>PAID</option>
-    <option value="Processing" ${order.status === 'Processing' ? 'selected' : ''}>PROCESSING</option>
+    <option value="Pending" ${(order.status === 'Pending' && String(order.payment_status || '').toLowerCase() !== 'paid') ? 'selected' : ''}>RECEIVED</option>
+    <option value="Paid" ${(order.status === 'Paid' || String(order.payment_status || '').toLowerCase() === 'paid') ? 'selected' : ''}>PAID</option>
     <option value="Preflight" ${order.status === 'Preflight' ? 'selected' : ''}>PREFLIGHT</option>
     <option value="Printing" ${order.status === 'Printing' ? 'selected' : ''}>PRINTING</option>
     <option value="Finishing" ${order.status === 'Finishing' ? 'selected' : ''}>FINISHING</option>
@@ -375,7 +373,7 @@
             if (['paid', 'succeeded', 'completed'].includes(payment)) return true;
             // Older/manual orders may not have payment_status. Once they are moved
             // beyond RECEIVED, the production workflow treats them as paid.
-            return ['paid', 'processing', 'preflight', 'printing', 'finishing', 'ready', 'shipped', 'completed'].includes(status);
+            return ['paid', 'preflight', 'printing', 'finishing', 'ready', 'shipped', 'completed'].includes(status);
         }
 
         function orderIsAwaitingPayment(order) {
@@ -387,7 +385,7 @@
         }
 
         function orderIsInProduction(order) {
-            return ['processing', 'preflight', 'printing', 'finishing'].includes(normalizedStatus(order));
+            return ['preflight', 'printing', 'finishing'].includes(normalizedStatus(order));
         }
 
         function orderIsReady(order) {
@@ -530,7 +528,7 @@
 
         function getStatusClass(status) {
             const classes = {
-                Pending: 'status-pending', Paid: 'status-paid', Processing: 'status-processing', Preflight: 'status-preflight',
+                Pending: 'status-pending', Paid: 'status-paid', Preflight: 'status-preflight',
                 Printing: 'status-printing', Finishing: 'status-finishing', Ready: 'status-ready',
                 Shipped: 'status-shipped', Completed: 'status-completed'
             };
