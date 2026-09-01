@@ -10,7 +10,6 @@ const bcrypt = require('bcryptjs');
 const jwt = require('jsonwebtoken');
 const multer = require('multer');
 const cors = require('cors');
-const nodemailer = require('nodemailer');
 const cloudinary = require('cloudinary').v2;
 const paypal = require('@paypal/checkout-server-sdk');
 const stripe = require('stripe')(process.env.STRIPE_SECRET_KEY);
@@ -114,6 +113,26 @@ const User = mongoose.model(
         role: {
             type: String,
             default: 'customer'
+        },
+
+        resetCodeHash: {
+            type: String,
+            default: null
+        },
+
+        resetCodeExpires: {
+            type: Date,
+            default: null
+        },
+
+        resetCodeAttempts: {
+            type: Number,
+            default: 0
+        },
+
+        resetCodeLastSentAt: {
+            type: Date,
+            default: null
         }
     })
 );
@@ -393,23 +412,76 @@ mongoose
 
 
 // -----------------------------------------------------
-// EMAIL
+// EMAIL (RESEND API)
 // -----------------------------------------------------
 
-const transporter =
-    nodemailer.createTransport({
+async function sendEmail({ to, subject, html, replyTo }) {
+    const apiKey = process.env.RESEND_API_KEY;
+    const from = process.env.EMAIL_FROM || 'Square Foot Printing <orders@squarefootprinting.com>';
 
-        service: 'gmail',
+    if (!apiKey) {
+        throw new Error('RESEND_API_KEY is not configured');
+    }
 
-        auth: {
+    const payload = {
+        from,
+        to: Array.isArray(to) ? to : [to],
+        subject,
+        html
+    };
 
-            user:
-                process.env.GMAIL_USER,
+    if (replyTo) {
+        payload.reply_to = replyTo;
+    }
 
-            pass:
-                process.env.GMAIL_PASS
-        }
+    const response = await fetch('https://api.resend.com/emails', {
+        method: 'POST',
+        headers: {
+            Authorization: `Bearer ${apiKey}`,
+            'Content-Type': 'application/json'
+        },
+        body: JSON.stringify(payload)
     });
+
+    const data = await response.json().catch(() => ({}));
+
+    if (!response.ok) {
+        throw new Error(data.message || data.name || `Resend error (${response.status})`);
+    }
+
+    return data;
+}
+
+function hashResetCode(email, code) {
+    const secret = process.env.JWT_SECRET || process.env.SHIPPING_QUOTE_SECRET || 'sfp-reset-fallback';
+    return crypto
+        .createHmac('sha256', secret)
+        .update(`${String(email).trim().toLowerCase()}:${String(code)}`)
+        .digest('hex');
+}
+
+function resetCodeEmailTemplate(code) {
+    return `
+    <div style="background:#f4f4f4;padding:32px 16px;font-family:Arial,sans-serif;color:#111;">
+        <div style="max-width:560px;margin:0 auto;background:#fff;border:1px solid #e8e8e8;border-radius:16px;overflow:hidden;">
+            <div style="background:#000;padding:24px;text-align:center;">
+                <div style="color:#fff;font-weight:800;font-size:22px;letter-spacing:.5px;">SQUARE FOOT PRINTING</div>
+            </div>
+            <div style="padding:32px;">
+                <h2 style="margin:0 0 12px;font-size:22px;">Password reset code</h2>
+                <p style="margin:0 0 24px;color:#555;line-height:1.6;">
+                    Use this code to reset your Square Foot Printing account password.
+                </p>
+                <div style="font-size:38px;letter-spacing:10px;font-weight:800;text-align:center;background:#f5f5f5;border-radius:12px;padding:20px 10px;margin:0 0 22px;">
+                    ${code}
+                </div>
+                <p style="margin:0;color:#666;font-size:13px;line-height:1.6;">
+                    This code expires in 10 minutes. If you did not request a password reset, you can ignore this email.
+                </p>
+            </div>
+        </div>
+    </div>`;
+}
 
 
 // -----------------------------------------------------
@@ -556,7 +628,7 @@ const emailTemplate =
                 <div style="background: #000; padding: 30px; text-align: center;">
 
                     <img
-                        src="cid:logo_sfp"
+                        src="https://squarefootprinting.com/images/SquareFootPrinting-Logo-White-Text-Lrg-01-e1525129997491.jpg"
                         alt="SQUARE FOOT PRINTING"
                         style="width: 250px; height: auto;"
                     >
@@ -893,6 +965,233 @@ app.post(
 );
 
 
+
+// -----------------------------------------------------
+// FORGOT PASSWORD - 6 DIGIT EMAIL CODE
+// -----------------------------------------------------
+
+app.post('/api/auth/forgot-password', async (req, res) => {
+    const genericResponse = {
+        success: true,
+        message: 'If an account exists for this email, a reset code has been sent.'
+    };
+
+    try {
+        const email = String(req.body?.email || '').trim().toLowerCase();
+
+        if (!email || !/^[^\s@]+@[^\s@]+\.[^\s@]+$/.test(email)) {
+            return res.status(400).json({
+                success: false,
+                message: 'Enter a valid email address.'
+            });
+        }
+
+        const user = await User.findOne({ email });
+
+        // Keep the same response for existing and non-existing accounts.
+        if (!user) {
+            return res.json(genericResponse);
+        }
+
+        const now = Date.now();
+        const lastSent = user.resetCodeLastSentAt
+            ? new Date(user.resetCodeLastSentAt).getTime()
+            : 0;
+
+        // One code per minute per account.
+        if (lastSent && now - lastSent < 60 * 1000) {
+            return res.json(genericResponse);
+        }
+
+        const code = crypto.randomInt(100000, 1000000).toString();
+
+        user.resetCodeHash = hashResetCode(email, code);
+        user.resetCodeExpires = new Date(now + 10 * 60 * 1000);
+        user.resetCodeAttempts = 0;
+        user.resetCodeLastSentAt = new Date(now);
+        await user.save();
+
+        try {
+            await sendEmail({
+                to: email,
+                subject: 'Your Square Foot Printing password reset code',
+                html: resetCodeEmailTemplate(code)
+            });
+        } catch (emailError) {
+            // Do not leave a usable reset code if delivery failed.
+            user.resetCodeHash = null;
+            user.resetCodeExpires = null;
+            user.resetCodeAttempts = 0;
+            await user.save();
+
+            console.error('❌ Resend password reset email error:', emailError.message);
+            return res.status(503).json({
+                success: false,
+                message: 'We could not send the reset email right now. Please try again shortly.'
+            });
+        }
+
+        return res.json(genericResponse);
+    } catch (error) {
+        console.error('Forgot password error:', error.message);
+        return res.status(500).json({
+            success: false,
+            message: 'Unable to process password reset right now.'
+        });
+    }
+});
+
+
+app.post('/api/auth/verify-reset-code', async (req, res) => {
+    try {
+        const email = String(req.body?.email || '').trim().toLowerCase();
+        const code = String(req.body?.code || '').trim();
+
+        if (!email || !/^\d{6}$/.test(code)) {
+            return res.status(400).json({
+                success: false,
+                message: 'Enter the 6-digit code from your email.'
+            });
+        }
+
+        const user = await User.findOne({ email });
+
+        if (
+            !user ||
+            !user.resetCodeHash ||
+            !user.resetCodeExpires ||
+            new Date(user.resetCodeExpires).getTime() < Date.now()
+        ) {
+            return res.status(400).json({
+                success: false,
+                message: 'The code is invalid or has expired. Request a new one.'
+            });
+        }
+
+        if ((user.resetCodeAttempts || 0) >= 5) {
+            user.resetCodeHash = null;
+            user.resetCodeExpires = null;
+            user.resetCodeAttempts = 0;
+            await user.save();
+
+            return res.status(429).json({
+                success: false,
+                message: 'Too many attempts. Request a new code.'
+            });
+        }
+
+        const submittedHash = hashResetCode(email, code);
+
+        const expectedBuffer = Buffer.from(user.resetCodeHash, 'hex');
+        const submittedBuffer = Buffer.from(submittedHash, 'hex');
+
+        const matches =
+            expectedBuffer.length === submittedBuffer.length &&
+            crypto.timingSafeEqual(expectedBuffer, submittedBuffer);
+
+        if (!matches) {
+            user.resetCodeAttempts = (user.resetCodeAttempts || 0) + 1;
+            await user.save();
+
+            return res.status(400).json({
+                success: false,
+                message: 'The code is invalid or has expired. Request a new one.'
+            });
+        }
+
+        // Invalidate the email code as soon as it is successfully verified.
+        user.resetCodeHash = null;
+        user.resetCodeExpires = null;
+        user.resetCodeAttempts = 0;
+        await user.save();
+
+        const resetToken = jwt.sign(
+            {
+                id: user._id,
+                purpose: 'password_reset'
+            },
+            process.env.JWT_SECRET || 'secretSFP',
+            { expiresIn: '10m' }
+        );
+
+        return res.json({
+            success: true,
+            resetToken
+        });
+    } catch (error) {
+        console.error('Verify reset code error:', error.message);
+        return res.status(500).json({
+            success: false,
+            message: 'Unable to verify the code right now.'
+        });
+    }
+});
+
+
+app.post('/api/auth/reset-password', async (req, res) => {
+    try {
+        const resetToken = String(req.body?.resetToken || '');
+        const password = String(req.body?.password || '');
+
+        if (password.length < 8) {
+            return res.status(400).json({
+                success: false,
+                message: 'Password must be at least 8 characters.'
+            });
+        }
+
+        let payload;
+
+        try {
+            payload = jwt.verify(
+                resetToken,
+                process.env.JWT_SECRET || 'secretSFP'
+            );
+        } catch (error) {
+            return res.status(400).json({
+                success: false,
+                message: 'Your reset session expired. Request a new code.'
+            });
+        }
+
+        if (payload?.purpose !== 'password_reset' || !payload?.id) {
+            return res.status(400).json({
+                success: false,
+                message: 'Invalid password reset session.'
+            });
+        }
+
+        const user = await User.findById(payload.id);
+
+        if (!user) {
+            return res.status(400).json({
+                success: false,
+                message: 'Invalid password reset session.'
+            });
+        }
+
+        const salt = await bcrypt.genSalt(10);
+        user.password = await bcrypt.hash(password, salt);
+        user.resetCodeHash = null;
+        user.resetCodeExpires = null;
+        user.resetCodeAttempts = 0;
+        user.resetCodeLastSentAt = null;
+        await user.save();
+
+        return res.json({
+            success: true,
+            message: 'Password changed successfully.'
+        });
+    } catch (error) {
+        console.error('Reset password error:', error.message);
+        return res.status(500).json({
+            success: false,
+            message: 'Unable to change your password right now.'
+        });
+    }
+});
+
+
 // -----------------------------------------------------
 // ORDER TOTAL + SHIPPING HELPERS
 // -----------------------------------------------------
@@ -1078,44 +1377,18 @@ app.post(
             await newOrder.save();
 
 
-            transporter
-                .sendMail({
-
-                    from:
-                        '"SFP Orders" <ventas@sfp-lasvegas.com>',
-
-                    to:
-                        process.env.ORDER_NOTIFICATION_EMAIL || 'ventas@sfp-lasvegas.com',
-
-                    subject:
-                        `New Order: ${orderData.order_id}`,
-
-                    html:
-                        emailTemplate(orderData),
-
-                    attachments: [
-
-                        {
-
-                            filename:
-                                'logo.jpg',
-
-                            path:
-                                './images/SquareFootPrinting-Logo-White-Text-Lrg-01-e1525129997491.jpg',
-
-                            cid:
-                                'logo_sfp'
-                        }
-                    ]
-                })
-
-                .catch(
-                    err =>
-                        console.log(
-                            '❌ Email Error:',
-                            err.message
-                        )
-                );
+            sendEmail({
+                to: process.env.ORDER_NOTIFICATION_EMAIL || 'orders@squarefootprinting.com',
+                subject: `New Order: ${orderData.order_id}`,
+                html: emailTemplate(orderData),
+                replyTo: orderData.customer_email || undefined
+            }).catch(
+                err =>
+                    console.log(
+                        '❌ Resend Email Error:',
+                        err.message
+                    )
+            );
 
 
             res

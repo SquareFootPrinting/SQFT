@@ -50,7 +50,7 @@ The system allows customers to configure custom printing products, calculate pri
 - Stripe
 - PayPal
 - Cloudinary
-- Nodemailer
+- Resend API
 
 ## Project Structure
 
