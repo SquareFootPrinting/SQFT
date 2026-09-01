@@ -19,7 +19,7 @@ The system allows customers to configure custom printing products, calculate pri
 - Centralized pricing management
 - MongoDB-based pricing overrides
 - Stripe payment processing
-- PayPal and Zelle payment options
+- Stripe card and Zelle payment options
 
 ## Product Categories
 
@@ -48,7 +48,7 @@ The system allows customers to configure custom printing products, calculate pri
 
 ### Services
 - Stripe
-- PayPal
+- Stripe
 - Cloudinary
 - Resend API
 

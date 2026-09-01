@@ -6,9 +6,7 @@
     <title>Checkout - Square Foot Printing</title>
     <script src="https://cdn.tailwindcss.com"></script>
     <script src="https://unpkg.com/lucide@latest"></script>
-    <script src="https://www.paypal.com/sdk/js?client-id=AUbkVL7-ki_DER-xXi7WUJLdmkIS2ISX7f_FLQTar5uhYycbzdEE6BcASfjqDTGJbdYrsywgkdkZ2O88"></script>
     <link href="https://fonts.googleapis.com/css2?family=Inter:wght@300;400;600;700;900&display=swap" rel="stylesheet">
-    <link rel="stylesheet" href="https://cdnjs.cloudflare.com/ajax/libs/font-awesome/6.5.1/css/all.min.css">
     <style>
         body { font-family: 'Inter', sans-serif; background-color: #fff; color: #000; overflow-x: hidden; }
         .heavy-italic { font-weight: 900; font-style: italic; text-transform: uppercase; letter-spacing: -0.05em; }
@@ -136,16 +134,12 @@
 
                         <section class="space-y-8">
                             <h2 class="heavy-italic text-2xl mb-2 flex items-center gap-3 text-black"><i data-lucide="credit-card" class="text-red-600"></i> Payment Method</h2>
-                            <div class="grid grid-cols-1 md:grid-cols-3 gap-4">
+                            <div class="grid grid-cols-1 md:grid-cols-2 gap-4">
                                 <div onclick="selectPayment('card')" id="pay-card" class="select-button payment-button p-6 rounded-[1.5rem] flex flex-col items-center gap-2">
                                     <i data-lucide="credit-card"></i><span class="heavy-italic text-[10px]">Credit Card</span>
                                 </div>
                                 <div onclick="selectPayment('zelle')" id="pay-zelle" class="select-button payment-button p-6 rounded-[1.5rem] flex flex-col items-center gap-2">
                                     <i data-lucide="wallet"></i><span class="heavy-italic text-[10px]">Zelle</span>
-                                </div>
-                                <div onclick="selectPayment('paypal')" id="pay-paypal" class="select-button payment-button p-6 rounded-[1.5rem] flex flex-col items-center justify-center gap-3">
-                                    <i class="fa-brands fa-paypal text-2xl"></i>
-                                    <span class="heavy-italic text-[10px] tracking-widest">PAYPAL</span>
                                 </div>
                             </div>
                             <div id="card-details" class="hidden bg-gray-50 p-8 rounded-[2.5rem] border border-gray-100 space-y-4">
@@ -214,8 +208,6 @@
                                     <span id="final-price-display" class="text-5xl heavy-italic italic">$0.00</span>
                                 </div>
 
-                                <div id="paypal-button-container" class="hidden mt-4"></div>
-
                                 <button onclick="validateAndPlaceOrder()" id="place-order-btn" class="w-full bg-red-600 hover:bg-black text-white font-black py-6 rounded-2xl text-[12px] uppercase tracking-[0.3em] italic transition-all shadow-xl">
                                     Place Order Now
                                 </button>
@@ -249,7 +241,6 @@
         let selectedUpsRate = null;
         let currentShippingFee = 0;
         const UPS_RATES_ENDPOINT = 'https://ft-f34l.onrender.com/api/shipping/ups-rates';
-        let paypalRendered = false;
 
         function toggleMobileMenu() { document.getElementById('mobile-menu').classList.toggle('open'); }
         function logout() { localStorage.clear(); window.location.reload(); }
@@ -387,17 +378,7 @@
             document.getElementById('card-details').classList.toggle('hidden', method !== 'card');
             document.getElementById('zelle-details').classList.toggle('hidden', method !== 'zelle');
 
-            const paypalBtnContainer = document.getElementById('paypal-button-container');
             const placeBtn = document.getElementById('place-order-btn');
-
-            if (method === 'paypal') {
-                paypalBtnContainer.classList.remove('hidden');
-                placeBtn.classList.add('hidden');
-                if (!paypalRendered) renderPayPalButtons();
-            } else {
-                paypalBtnContainer.classList.add('hidden');
-                placeBtn.classList.remove('hidden');
-            }
 
             if (method === 'zelle') {
                 renderZelleConfiguration();
@@ -408,107 +389,6 @@
                 placeBtn.innerText = 'Place Order Now';
             }
         }
-
-function renderPayPalButtons() {
-    if (paypalRendered) return;
-    paypalRendered = true;
-
-    paypal.Buttons({
-        createOrder: async function(data, actions) {
-            // 1. Validaciones iniciales
-            const cart = JSON.parse(localStorage.getItem('sqft_cart')) || [];
-            if (cart.length === 0) {
-                alert("Your cart is empty.");
-                return;
-            }
-
-            const email = document.getElementById('emailAddress').value;
-            const name = document.getElementById('fullName').value;
-            if (!name || !email) {
-                alert("Please fill in Name and Email first.");
-                return actions.reject();
-            }
-            if (currentMethod === 'shipping') {
-                const address = getShippingAddress();
-                if (!address.street || !address.city || !address.state || !address.postalCode) { alert('Please complete the shipping address.'); return actions.reject(); }
-                if (!selectedUpsRate) { alert('Please get UPS rates and select a shipping service before paying.'); return actions.reject(); }
-            }
-
-            // 2. Capturar total real de la pantalla
-            const totalVisible = document.getElementById('final-price-display').innerText;
-            const totalParaCobrar = parseFloat(totalVisible.replace(/[$,]/g, ''));
-
-            try {
-                const paypalOrderNumber = 'SFP-' + Date.now();
-
-                const preparedItems = await prepareOrderItems(
-                    cart,
-                    paypalOrderNumber
-                );
-
-                // PASO A: Guardar orden en MongoDB como 'Pending'
-                const response = await fetch('https://ft-f34l.onrender.com/api/place-order', {
-                    method: 'POST',
-                    headers: { 'Content-Type': 'application/json' },
-                    body: JSON.stringify({
-                        order_id: paypalOrderNumber,
-                        customer_name: name,
-                        customer_email: email,
-                        customer_phone: document.getElementById('phoneNumber').value,
-                        order_items: preparedItems,
-                        delivery_method: currentMethod,
-                        shipping_address: currentMethod === 'shipping' ? getShippingAddress() : null,
-                        shipping_service: currentMethod === 'shipping' ? selectedUpsRate : null,
-                        shipping_cost: currentMethod === 'shipping' ? currentShippingFee : 0,
-                        total_price: totalVisible,
-                        payment_method: 'paypal',
-                        payment_status: 'Pending'
-                    })
-                });
-                const resData = await response.json();
-                if (resData.success) localStorage.setItem('mongoOrderId', resData.id);
-
-                // PASO B: Crear orden en PayPal usando el totalForzado
-                const paypalRes = await fetch('https://ft-f34l.onrender.com/api/checkout/create-paypal-order', {
-                    method: 'POST',
-                    headers: { 'Content-Type': 'application/json' },
-                    body: JSON.stringify({ orderDatabaseId: resData.id })
-                });
-
-                if (!paypalRes.ok) throw new Error("PayPal logic error");
-                
-                const paypalOrder = await paypalRes.json();
-                return paypalOrder.id;
-
-            } catch (err) {
-                console.error("❌ Error:", err);
-                alert("Payment Init Failed: " + err.message);
-                return;
-            }
-        },
-
-        onApprove: function(data, actions) {
-            const dbId = localStorage.getItem('mongoOrderId');
-            return fetch('https://ft-f34l.onrender.com/api/checkout/capture-paypal-order', {
-                method: 'POST',
-                headers: { 'Content-Type': 'application/json' },
-                body: JSON.stringify({
-                    orderID: data.orderID,
-                    orderDatabaseId: dbId
-                })
-            })
-            .then(res => res.json())
-            .then(details => {
-                if (details.success) {
-                    localStorage.removeItem('sqft_cart');
-                    window.location.href = "order.html?id=" + data.orderID;
-                } else {
-                    alert("Capture failed: " + details.message);
-                }
-            });
-        }
-    }).render('#paypal-button-container');
-}
 
         function formatExpiry(el) {
             let val = el.value.replace(/\D/g, '');
