@@ -539,17 +539,26 @@ async function prepareOrderItems(cart, orderNumber) {
             btn.innerText = "SENDING ORDER...";
             btn.disabled = true;
 
-            const oNum =
-                'ORD-' + Math.floor(Math.random() * 900000);
+            // One browser checkout attempt keeps one stable token. If the
+            // customer cancels Stripe and tries again, the backend reuses the
+            // same unpaid MongoDB order instead of creating a duplicate.
+            let checkoutToken = sessionStorage.getItem('sqftCheckoutToken');
+            if (!checkoutToken) {
+                checkoutToken = (window.crypto?.randomUUID?.() ||
+                    `checkout-${Date.now()}-${Math.random().toString(16).slice(2)}`);
+                sessionStorage.setItem('sqftCheckoutToken', checkoutToken);
+            }
 
             try {
+                // The trusted server now generates the public ORD- number.
+                // A temporary label is only used while preparing uploaded files.
                 const preparedItems = await prepareOrderItems(
                     cart,
-                    oNum
+                    checkoutToken
                 );
 
                 const oInfo = {
-                    order_id: oNum,
+                    checkout_token: checkoutToken,
                     customer_name: name,
                     customer_email: email,
                     customer_phone:
@@ -620,7 +629,7 @@ if (currentPayment === 'card') {
     }
 
     // Conservamos carrito y número de orden hasta confirmar el pago.
-    sessionStorage.setItem('stripeOrderNumber', oNum);
+    sessionStorage.setItem('stripeOrderNumber', result.order_id);
     sessionStorage.setItem('stripeMongoOrderId', result.id);
 
     window.location.href = stripeData.url;
@@ -630,7 +639,7 @@ if (currentPayment === 'card') {
                 localStorage.removeItem('sqft_cart');
 
                 window.location.href =
-                    `order.html?id=${oNum}`;
+                    `order.html?id=${encodeURIComponent(result.order_id)}`;
 
             } catch (error) {
                 console.error("Order error:", error);

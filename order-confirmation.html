@@ -1,1 +1,82 @@
-<!doctype html><html lang="en"><head><meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1"><title>Order Confirmed - Square Foot Printing</title><script src="https://cdn.tailwindcss.com"></script></head><body class="bg-gray-50 min-h-screen flex items-center justify-center p-6"><main class="bg-white max-w-xl w-full rounded-3xl shadow-xl p-10 text-center"><div class="text-5xl mb-4">✓</div><h1 class="text-3xl font-black uppercase italic">Payment received</h1><p class="mt-4 text-gray-500 font-semibold">Thank you. Your Square Foot Printing order has been received and your card payment is being confirmed.</p><div id="order-number" class="mt-6 text-xl font-black"></div><a href="track.html" class="inline-block mt-8 bg-black text-white px-8 py-4 rounded-xl font-black uppercase text-xs">Track Order</a><a href="index.html" class="block mt-4 text-xs font-black uppercase underline">Back to store</a></main><script>const order=sessionStorage.getItem('stripeOrderNumber');if(order)document.getElementById('order-number').textContent='Order '+order;localStorage.removeItem('sqft_cart');</script></body></html>
+<!doctype html>
+<html lang="en">
+<head>
+    <meta charset="utf-8">
+    <meta name="viewport" content="width=device-width,initial-scale=1">
+    <title>Order Confirmed - Square Foot Printing</title>
+    <script src="https://cdn.tailwindcss.com"></script>
+</head>
+<body class="bg-gray-50 min-h-screen flex items-center justify-center p-6">
+    <main class="bg-white max-w-xl w-full rounded-3xl shadow-xl p-10 text-center">
+        <div id="status-icon" class="text-5xl mb-4">…</div>
+        <h1 id="status-title" class="text-3xl font-black uppercase italic">Confirming payment</h1>
+        <p id="status-message" class="mt-4 text-gray-500 font-semibold">
+            Please wait while we securely verify your Stripe payment.
+        </p>
+        <div id="order-number" class="mt-6 text-xl font-black"></div>
+        <a id="track-link" href="track.html" class="hidden inline-block mt-8 bg-black text-white px-8 py-4 rounded-xl font-black uppercase text-xs">Track Order</a>
+        <a href="index.html" class="block mt-4 text-xs font-black uppercase underline">Back to store</a>
+    </main>
+
+<script>
+const API_BASE = 'https://ft-f34l.onrender.com';
+const params = new URLSearchParams(window.location.search);
+const stripeSession = params.get('stripe_session');
+const titleEl = document.getElementById('status-title');
+const messageEl = document.getElementById('status-message');
+const iconEl = document.getElementById('status-icon');
+const orderEl = document.getElementById('order-number');
+const trackEl = document.getElementById('track-link');
+
+function showFailure(message) {
+    iconEl.textContent = '!';
+    titleEl.textContent = 'Payment not confirmed';
+    messageEl.textContent = message || 'We could not verify this payment. Your cart has been kept so you can try again.';
+}
+
+async function verifyPayment() {
+    if (!stripeSession) {
+        showFailure('Missing Stripe session. Your cart has not been cleared.');
+        return;
+    }
+
+    for (let attempt = 0; attempt < 4; attempt += 1) {
+        try {
+            const response = await fetch(
+                `${API_BASE}/api/checkout/stripe-session-status?session_id=${encodeURIComponent(stripeSession)}`
+            );
+            const data = await response.json();
+
+            if (response.ok && data.success && data.paid) {
+                iconEl.textContent = '✓';
+                titleEl.textContent = 'Payment received';
+                messageEl.textContent = 'Thank you. Your Square Foot Printing order has been paid and received.';
+                orderEl.textContent = `Order ${data.order_id}`;
+                trackEl.classList.remove('hidden');
+
+                // Clear checkout data only after Stripe itself confirms payment.
+                localStorage.removeItem('sqft_cart');
+                sessionStorage.removeItem('sqftCheckoutToken');
+                sessionStorage.removeItem('stripeOrderNumber');
+                sessionStorage.removeItem('stripeMongoOrderId');
+                return;
+            }
+
+            if (response.ok && data.success && !data.paid) {
+                showFailure('Stripe has not confirmed this payment. Your cart has been kept so you can try again.');
+                return;
+            }
+        } catch (error) {
+            console.error('Payment verification error:', error);
+        }
+
+        await new Promise(resolve => setTimeout(resolve, 1250));
+    }
+
+    showFailure('We could not reach the payment verification service. Your cart has been kept.');
+}
+
+verifyPayment();
+</script>
+</body>
+</html>

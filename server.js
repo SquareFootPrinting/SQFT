@@ -159,6 +159,24 @@ const Order = mongoose.model(
             default: ''
         },
 
+        // Stable token for one browser checkout attempt. Used to reuse an
+        // unpaid order when a customer cancels Stripe and tries again.
+        checkout_token: {
+            type: String,
+            default: undefined,
+            index: true
+        },
+
+        order_notification_sent_at: {
+            type: Date,
+            default: null
+        },
+
+        stripe_checkout_session_id: {
+            type: String,
+            default: ''
+        },
+
         createdAt: {
             type: Date,
             default: Date.now
@@ -204,6 +222,70 @@ const PricingCatalog = mongoose.model(
 );
 
 
+
+// -----------------------------------------------------
+// ORDER / STRIPE HELPERS
+// -----------------------------------------------------
+
+async function generateUniqueOrderId() {
+    // Six digits, generated on the trusted server. We also check MongoDB for
+    // collisions before using it so the browser never chooses the order ID.
+    for (let attempt = 0; attempt < 20; attempt += 1) {
+        const orderId = `ORD-${crypto.randomInt(100000, 1000000)}`;
+        const exists = await Order.exists({ order_id: orderId });
+        if (!exists) return orderId;
+    }
+
+    throw new Error('Could not generate a unique order number');
+}
+
+async function sendPaidOrderNotification(order) {
+    if (!order || order.order_notification_sent_at) return;
+
+    try {
+        await sendEmail({
+            to: process.env.ORDER_NOTIFICATION_EMAIL || 'orders@squarefootprinting.com',
+            subject: `Paid Order: ${order.order_id}`,
+            html: emailTemplate(order),
+            replyTo: order.customer_email || undefined
+        });
+
+        await Order.updateOne(
+            { _id: order._id, order_notification_sent_at: null },
+            { $set: { order_notification_sent_at: new Date() } }
+        );
+    } catch (error) {
+        // Payment confirmation must never fail because an email provider is
+        // temporarily unavailable. Leaving the timestamp empty permits retry.
+        console.error('❌ Resend paid-order email error:', error.message);
+    }
+}
+
+async function finalizeStripePaidOrder(session) {
+    if (!session || session.payment_status !== 'paid') return null;
+
+    const orderDatabaseId = session.metadata?.orderDatabaseId;
+    if (!orderDatabaseId) {
+        throw new Error('Stripe payment is missing orderDatabaseId metadata');
+    }
+
+    const updatedOrder = await Order.findByIdAndUpdate(
+        orderDatabaseId,
+        {
+            payment_status: 'Paid',
+            status: 'Processing',
+            transaction_id: session.payment_intent || session.id
+        },
+        { returnDocument: 'after' }
+    );
+
+    if (!updatedOrder) {
+        throw new Error(`MongoDB order not found: ${orderDatabaseId}`);
+    }
+
+    await sendPaidOrderNotification(updatedOrder);
+    return updatedOrder;
+}
 
 // -----------------------------------------------------
 // STRIPE WEBHOOK
@@ -269,67 +351,7 @@ app.post(
                 if (
                     session.payment_status === 'paid'
                 ) {
-
-                    const orderDatabaseId =
-                        session.metadata
-                            ?.orderDatabaseId;
-
-
-                    if (!orderDatabaseId) {
-
-                        console.error(
-                            '❌ Stripe payment received without orderDatabaseId'
-                        );
-
-                        return res
-                            .status(400)
-                            .json({
-                                received: false,
-                                error:
-                                    'Missing orderDatabaseId'
-                            });
-                    }
-
-
-                    const updatedOrder =
-                        await Order
-                            .findByIdAndUpdate(
-
-                                orderDatabaseId,
-
-                                {
-                                    payment_status:
-                                        'Paid',
-
-                                    status:
-                                        'Processing',
-
-                                    transaction_id:
-                                        session.payment_intent ||
-                                        session.id
-                                },
-
-                                {
-                                    new: true
-                                }
-                            );
-
-
-                    if (!updatedOrder) {
-
-                        console.error(
-                            `❌ MongoDB order not found: ${orderDatabaseId}`
-                        );
-
-                        return res
-                            .status(404)
-                            .json({
-                                received: false,
-                                error:
-                                    'Order not found'
-                            });
-                    }
-
+                    const updatedOrder = await finalizeStripePaidOrder(session);
 
                     console.log(
                         `✅ Stripe payment confirmed for order ${updatedOrder.order_id}`
@@ -1308,69 +1330,77 @@ app.post(
                 return res.status(409).json({ success:false, error:'Order total changed. Refresh checkout and try again.', serverTotal:calculated.total });
             }
 
-            const newOrder =
-                new Order({
+            const checkoutToken = String(orderData.checkout_token || '')
+                .trim()
+                .slice(0, 128);
 
-                    order_id:
-                        orderData.order_id,
+            const reusableOrder = checkoutToken
+                ? await Order.findOne({
+                    checkout_token: checkoutToken,
+                    payment_status: { $ne: 'Paid' }
+                })
+                : null;
 
-                    customer_name:
-                        orderData.customer_name,
+            const orderFields = {
+                customer_name: orderData.customer_name,
+                customer_email: orderData.customer_email,
+                customer_phone: orderData.customer_phone,
+                delivery_method: orderData.delivery_method || 'pickup',
+                shipping_address: orderData.delivery_method === 'shipping' ? orderData.shipping_address : null,
+                shipping_service: shippingService,
+                shipping_cost: shippingCost,
+                payment_method: orderData.payment_method || 'card',
+                total_price: `$${calculated.total.toFixed(2)}`,
+                order_items: orderData.order_items,
+                payment_status: 'Pending',
+                transaction_id: ''
+            };
 
-                    customer_email:
-                        orderData.customer_email,
+            let savedOrder;
+            let reused = false;
 
-                    customer_phone:
-                        orderData.customer_phone,
+            if (reusableOrder) {
+                // Stripe was cancelled/closed or failed before payment. Update
+                // the existing pending order instead of creating a duplicate.
+                // Expire any previous open Stripe session first so an old tab
+                // cannot later charge a stale total after checkout changes.
+                if (reusableOrder.stripe_checkout_session_id) {
+                    try {
+                        const previousSession = await stripe.checkout.sessions.retrieve(
+                            reusableOrder.stripe_checkout_session_id
+                        );
+                        if (previousSession.status === 'open') {
+                            await stripe.checkout.sessions.expire(previousSession.id);
+                        }
+                    } catch (error) {
+                        console.warn('Could not expire previous Stripe session:', error.message);
+                    }
+                }
 
-                    delivery_method: orderData.delivery_method || 'pickup',
-                    shipping_address: orderData.delivery_method === 'shipping' ? orderData.shipping_address : null,
-                    shipping_service: shippingService,
-                    shipping_cost: shippingCost,
-                    payment_method: orderData.payment_method || '',
-
-                    total_price:
-                        `$${calculated.total.toFixed(2)}`,
-
-                    order_items:
-                        orderData.order_items,
-
-                    payment_status:
-                        orderData.payment_status ||
-                        'Pending',
-
-                    transaction_id:
-                        orderData.transaction_id ||
-                        ''
+                Object.assign(reusableOrder, orderFields, {
+                    stripe_checkout_session_id: ''
                 });
+                savedOrder = await reusableOrder.save();
+                reused = true;
+            } else {
+                const orderId = await generateUniqueOrderId();
+                savedOrder = await new Order({
+                    ...orderFields,
+                    order_id: orderId,
+                    checkout_token: checkoutToken || undefined,
+                    status: 'Pending'
+                }).save();
+            }
 
-
-            await newOrder.save();
-
-
-            sendEmail({
-                to: process.env.ORDER_NOTIFICATION_EMAIL || 'orders@squarefootprinting.com',
-                subject: `New Order: ${orderData.order_id}`,
-                html: emailTemplate(orderData),
-                replyTo: orderData.customer_email || undefined
-            }).catch(
-                err =>
-                    console.log(
-                        '❌ Resend Email Error:',
-                        err.message
-                    )
-            );
-
-
-            res
-                .status(200)
-                .json({
-
-                    success: true,
-
-                    id:
-                        newOrder._id
-                });
+            // No "new order" email is sent here. An abandoned Stripe checkout
+            // is not a real paid order. Notification is sent only after Stripe
+            // confirms payment in finalizeStripePaidOrder().
+            res.status(200).json({
+                success: true,
+                id: savedOrder._id,
+                order_id: savedOrder.order_id,
+                reused
+            });
 
 
         } catch (error) {
@@ -1895,6 +1925,43 @@ app.patch('/api/admin/orders/:id/tracking', authMiddleware, async (req, res) => 
 // STRIPE - CREAR CHECKOUT SESSION
 // -----------------------------------------------------
 
+app.get('/api/checkout/stripe-session-status', async (req, res) => {
+    try {
+        const sessionId = String(req.query.session_id || '').trim();
+
+        if (!sessionId || !sessionId.startsWith('cs_')) {
+            return res.status(400).json({ success: false, error: 'Invalid Stripe session' });
+        }
+
+        const session = await stripe.checkout.sessions.retrieve(sessionId);
+        let order = null;
+
+        if (session.payment_status === 'paid') {
+            order = await finalizeStripePaidOrder(session);
+        } else if (session.metadata?.orderDatabaseId) {
+            order = await Order.findById(session.metadata.orderDatabaseId);
+        }
+
+        if (!order) {
+            return res.status(404).json({ success: false, error: 'Order not found' });
+        }
+
+        return res.json({
+            success: true,
+            paid: session.payment_status === 'paid',
+            stripePaymentStatus: session.payment_status,
+            order_id: order.order_id,
+            orderDatabaseId: order._id,
+            payment_status: order.payment_status,
+            status: order.status
+        });
+    } catch (error) {
+        console.error('Stripe session status error:', error.message);
+        return res.status(500).json({ success: false, error: 'Could not verify payment' });
+    }
+});
+
+
 app.post(
     '/api/checkout/create-stripe-session',
 
@@ -1983,6 +2050,31 @@ const amount = Math.round(numericTotal * 100);
             }
 
 
+            // If the same request is repeated before redirecting, reuse the
+            // already-open Stripe session for this exact pending order.
+            if (order.stripe_checkout_session_id) {
+                try {
+                    const existingSession = await stripe.checkout.sessions.retrieve(
+                        order.stripe_checkout_session_id
+                    );
+
+                    if (
+                        existingSession.status === 'open' &&
+                        existingSession.payment_status !== 'paid' &&
+                        existingSession.url
+                    ) {
+                        return res.json({
+                            success: true,
+                            sessionId: existingSession.id,
+                            url: existingSession.url,
+                            reused: true
+                        });
+                    }
+                } catch (error) {
+                    console.warn('Could not reuse Stripe session:', error.message);
+                }
+            }
+
             const session =
                 await stripe
                     .checkout
@@ -2043,6 +2135,8 @@ const amount = Math.round(numericTotal * 100);
                             `${frontendUrl}/checkout.html?payment=cancelled`
                     });
 
+            order.stripe_checkout_session_id = session.id;
+            await order.save();
 
             res.json({
 
