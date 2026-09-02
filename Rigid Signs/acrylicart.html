@@ -257,7 +257,7 @@
         if (window.pdfjsLib?.GlobalWorkerOptions) window.pdfjsLib.GlobalWorkerOptions.workerSrc = 'https://cdnjs.cloudflare.com/ajax/libs/pdf.js/3.11.174/pdf.worker.min.js';
         if (window.lucide && typeof window.lucide.createIcons === 'function') window.lucide.createIcons();
         
-        let uploadedFileUrl = ""; 
+        let uploadedFileUrl = ""; let uploadedFileName = ""; 
         let isPdf = false;
         let originalW = 0, originalH = 0;
         let globalCalculatedPrice = 0;
@@ -437,7 +437,7 @@
                 const response = await fetch('https://ft-f34l.onrender.com/api/upload-preview', { method: 'POST', body: formData });
                 const data = await response.json();
                 if (data.success) {
-                    uploadedFileUrl = data.url;
+                    uploadedFileUrl = data.url; uploadedFileName = data.originalName || "";
                     document.getElementById('upload-progress-bar').style.width = '100%';
                 }
             } catch (err) { console.error("Upload failed"); }
@@ -455,7 +455,7 @@
             document.getElementById('drop-zone').classList.remove('hidden');
             document.getElementById('validation-panel').classList.add('hidden');
             document.getElementById('file-input').value = "";
-            uploadedFileUrl = "";
+            uploadedFileUrl = ""; uploadedFileName = "";
             document.getElementById('upload-progress-bar').style.width = '0%';
             document.getElementById('add-to-cart-btn').disabled = true;
             document.getElementById('add-to-cart-btn').classList.replace('bg-black', 'bg-gray-200');
@@ -480,7 +480,8 @@
                 name: "ACRYLIC ART PRINT", 
                 price: globalCalculatedPrice, 
                 image: document.getElementById('main-prod-img').src, 
-                fileUrl: uploadedFileUrl, 
+                fileUrl: uploadedFileUrl,
+                originalFileName: uploadedFileName, 
                 details: details 
             }, "rigidSigns"));
             

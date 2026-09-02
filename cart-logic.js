@@ -1,5 +1,6 @@
 // CART-LOGIC.JS 
-window.currentFileUrl = ""; 
+window.currentFileUrl = "";
+window.currentFileName = ""; 
 
 async function handleImmediateUpload(event, buttonId) {
     const file = event.target.files[0];
@@ -28,6 +29,7 @@ async function handleImmediateUpload(event, buttonId) {
 
         if (data.success) {
             window.currentFileUrl = data.url; // Guardamos el link de Cloudinary
+            window.currentFileName = data.originalName || file.name || "";
             console.log("✅ File ready:", window.currentFileUrl);
             
             if (btn) {
@@ -60,7 +62,8 @@ function addToCartWithFile(productData) {
     const finalProduct = {
         ...productData,
         image: productData.image || '../images/placeholder.png', // Miniatura del producto
-        fileUrl: window.currentFileUrl // El archivo de alta resolución para imprimir
+        fileUrl: window.currentFileUrl, // El archivo de alta resolución para imprimir
+        originalFileName: window.currentFileName || ""
     };
 
     cart.push(finalProduct);

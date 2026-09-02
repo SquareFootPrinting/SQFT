@@ -201,7 +201,7 @@
                     <tr id="details-${order._id}" data-order-details="${order._id}" class="hidden bg-gray-50/50">
                         <td colspan="6" class="p-6 border-x border-b rounded-b-[2rem]">
                             <div class="grid grid-cols-1 md:grid-cols-2 gap-6">
-                                ${order.order_items ? order.order_items.map(item => `
+                                ${order.order_items ? order.order_items.map((item, itemIndex) => `
     <div class="bg-white p-6 rounded-3xl border border-gray-100 shadow-sm">
         <div class="flex flex-col sm:flex-row gap-5">
 
@@ -317,6 +317,13 @@
                                     class="border border-black text-black px-4 py-2 rounded-xl text-[9px] font-black uppercase italic hover:bg-black hover:text-white transition-colors">
                                     Original Art
                                 </a>
+
+                                <button
+                                    type="button"
+                                    onclick="event.stopPropagation(); downloadOriginalArtwork('${order._id}', ${itemIndex})"
+                                    class="bg-black text-white px-4 py-2 rounded-xl text-[9px] font-black uppercase italic hover:bg-red-600 transition-colors">
+                                    Download ${item.originalFileName ? `— ${escapePrint(item.originalFileName)}` : 'Original Art'}
+                                </button>
                             `
                             : ''
                     }
@@ -462,6 +469,32 @@
         function formatShippingAddress(address) {
             if (!address) return 'Local Pickup';
             return [address.street, address.street2, address.city, address.state, address.postalCode].filter(Boolean).join(', ');
+        }
+
+        async function downloadOriginalArtwork(orderId, itemIndex) {
+            const token = localStorage.getItem('token');
+            try {
+                const response = await fetch(`https://ft-f34l.onrender.com/api/admin/orders/${orderId}/artwork/${itemIndex}/download`, {
+                    headers: { 'x-auth-token': token }
+                });
+                if (!response.ok) {
+                    const data = await response.json().catch(() => ({}));
+                    throw new Error(data.error || 'Artwork download failed');
+                }
+                const blob = await response.blob();
+                const url = URL.createObjectURL(blob);
+                const link = document.createElement('a');
+                link.href = url;
+                const order = window.adminOrdersById?.[orderId];
+                const originalName = order?.order_items?.[itemIndex]?.originalFileName || 'artwork';
+                link.download = originalName;
+                document.body.appendChild(link);
+                link.click();
+                link.remove();
+                URL.revokeObjectURL(url);
+            } catch (error) {
+                alert(error.message || 'Artwork download failed');
+            }
         }
 
         async function saveTracking(orderId) {

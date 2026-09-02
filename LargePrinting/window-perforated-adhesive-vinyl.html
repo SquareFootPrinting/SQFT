@@ -233,7 +233,7 @@
         if (window.pdfjsLib?.GlobalWorkerOptions) window.pdfjsLib.GlobalWorkerOptions.workerSrc = 'https://cdnjs.cloudflare.com/ajax/libs/pdf.js/3.11.174/pdf.worker.min.js';
         if (window.lucide && typeof window.lucide.createIcons === 'function') window.lucide.createIcons();
         
-        let uploadedFileUrl = ""; 
+        let uploadedFileUrl = ""; let uploadedFileName = ""; 
         let isPdf = false;
         let originalW = 0, originalH = 0;
         const PRODUCT_ID = "window-perf";
@@ -403,7 +403,7 @@
                 const response = await fetch('https://ft-f34l.onrender.com/api/upload-preview', { method: 'POST', body: formData });
                 const data = await response.json();
                 if (data.success) {
-                    uploadedFileUrl = data.url;
+                    uploadedFileUrl = data.url; uploadedFileName = data.originalName || "";
                     document.getElementById('upload-progress').style.width = '100%';
                     document.getElementById('status-title').innerText = "READY TO APPROVE ✓";
                     document.getElementById('approve-btn').disabled = false;
@@ -424,7 +424,7 @@
             document.getElementById('drop-zone').classList.remove('hidden');
             document.getElementById('validation-panel').classList.add('hidden');
             document.getElementById('file-input').value = "";
-            uploadedFileUrl = "";
+            uploadedFileUrl = ""; uploadedFileName = "";
             document.getElementById('upload-progress').style.width = '0%';
             document.getElementById('add-to-cart-btn').disabled = true;
             document.getElementById('add-to-cart-btn').classList.replace('bg-black', 'bg-gray-200');
@@ -444,6 +444,7 @@
                 price: parseFloat(document.getElementById('final-price').innerText.replace(/[$,]/g, '')),
                 image: "../images/Large Printing/Window-Perf-AB-Vinyl-01.png",
                 fileUrl: uploadedFileUrl,
+                originalFileName: uploadedFileName,
                 details: `SIZE: ${w}"x${h}" | LAM: ${lamSel.options[lamSel.selectedIndex].text} | TURN: ${turnSel.options[turnSel.selectedIndex].text} | QTY: ${document.getElementById('qty-input').value}`
             };
             let cart = JSON.parse(localStorage.getItem('sqft_cart')) || [];

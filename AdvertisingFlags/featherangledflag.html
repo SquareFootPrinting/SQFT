@@ -296,7 +296,7 @@
     <script>
         if (window.pdfjsLib?.GlobalWorkerOptions) window.pdfjsLib.GlobalWorkerOptions.workerSrc = 'https://cdnjs.cloudflare.com/ajax/libs/pdf.js/3.11.174/pdf.worker.min.js';
         if (window.lucide && typeof window.lucide.createIcons === 'function') window.lucide.createIcons();
-        let uploadedFileUrl = "";
+        let uploadedFileUrl = ""; let uploadedFileName = "";
         let isPdf = false;
         let originalW = 0, originalH = 0;
         const PRODUCT_ID = "feather-angled-flag-pro";
@@ -469,7 +469,7 @@
                 const response = await fetch('https://ft-f34l.onrender.com/api/upload-preview', { method: 'POST', body: formData });
                 const data = await response.json();
                 if (data.success) {
-                    uploadedFileUrl = data.url;
+                    uploadedFileUrl = data.url; uploadedFileName = data.originalName || "";
                     document.getElementById('upload-progress').style.width = '100%';
                 }
             } catch (err) { console.error("Upload failed"); }
@@ -481,7 +481,7 @@
     document.getElementById('file-input').value = "";
     document.getElementById('preview-thumb').classList.remove('is-rotated-angled');
     document.getElementById('pdf-canvas').classList.remove('is-rotated-angled');
-    uploadedFileUrl = "";
+    uploadedFileUrl = ""; uploadedFileName = "";
 
     // LIMPIAR ESTADOS DE IMAGEN
     const previewThumb = document.getElementById('preview-thumb');

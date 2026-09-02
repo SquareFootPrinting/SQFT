@@ -244,7 +244,7 @@
        if (window.pdfjsLib?.GlobalWorkerOptions) window.pdfjsLib.GlobalWorkerOptions.workerSrc = 'https://cdnjs.cloudflare.com/ajax/libs/pdf.js/3.11.174/pdf.worker.min.js';
 if (window.lucide && typeof window.lucide.createIcons === 'function') window.lucide.createIcons();
 
-let uploadedFileUrl = ""; 
+let uploadedFileUrl = ""; let uploadedFileName = ""; 
 let isPdf = false;
 let originalW = 0, originalH = 0;
 const PRODUCT_ID = "backlit-film"; 
@@ -461,7 +461,7 @@ function approveArt() {
 function resetUpload() {
     document.getElementById('drop-zone').classList.remove('hidden');
     document.getElementById('validation-panel').classList.add('hidden');
-    document.getElementById('file-input').value = ""; uploadedFileUrl = "";
+    document.getElementById('file-input').value = ""; uploadedFileUrl = ""; uploadedFileName = "";
     document.getElementById('add-to-cart-btn').disabled = true;
     document.getElementById('add-to-cart-btn').classList.replace('bg-black', 'bg-gray-200');
 }
@@ -491,6 +491,7 @@ function addToCart() {
         price: parseFloat(document.getElementById('final-price').innerText.replace(/[$,]/g, '')),
         image: document.getElementById('main-prod-img').src,
         fileUrl: uploadedFileUrl,
+                originalFileName: uploadedFileName,
         // Agregamos LAM al string de detalles
         details: `QTY: ${qty} PZS | SIZE: ${w}"x${h}" | FINISH: ${finishText} | LAM: ${lamText} | TURN: ${turnText}`,
         quantity: parseInt(qty),

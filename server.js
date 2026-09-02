@@ -2020,12 +2020,19 @@ app.post(
                             );
 
 
+                    // Cloudinary keeps its own unique asset identifier, while
+                    // the original customer filename travels with the order.
+                    // path.basename prevents clients from submitting a path as a name.
+                    const originalName = path.basename(String(req.file.originalname || 'artwork'));
+
                     res.json({
 
                         success: true,
 
                         url:
-                            result.secure_url
+                            result.secure_url,
+
+                        originalName
                     });
 
 
@@ -2062,6 +2069,51 @@ app.post(
 );
 
 
+
+// -----------------------------------------------------
+// ADMIN - DOWNLOAD ORIGINAL ARTWORK WITH CUSTOMER FILENAME
+// -----------------------------------------------------
+
+app.get('/api/admin/orders/:id/artwork/:itemIndex/download', authMiddleware, async (req, res) => {
+    try {
+        if (req.user.role !== 'admin') {
+            return res.status(403).json({ msg: 'Forbidden' });
+        }
+
+        const order = await Order.findById(req.params.id).lean();
+        if (!order) return res.status(404).json({ error: 'Order not found' });
+
+        const itemIndex = Number.parseInt(req.params.itemIndex, 10);
+        const item = Number.isInteger(itemIndex) ? order.order_items?.[itemIndex] : null;
+        if (!item?.fileUrl) return res.status(404).json({ error: 'Artwork not found' });
+
+        const artworkUrl = new URL(String(item.fileUrl));
+        // Only proxy artwork that was actually stored from Cloudinary.
+        if (artworkUrl.protocol !== 'https:' || !artworkUrl.hostname.endsWith('cloudinary.com')) {
+            return res.status(400).json({ error: 'Invalid artwork source' });
+        }
+
+        const upstream = await fetch(artworkUrl);
+        if (!upstream.ok) {
+            return res.status(502).json({ error: 'Unable to download artwork' });
+        }
+
+        const fallbackExt = path.extname(artworkUrl.pathname) || '';
+        const requestedName = path.basename(String(item.originalFileName || `artwork-${order.order_id || 'order'}${fallbackExt}`));
+        const safeName = requestedName.replace(/[\r\n"\\/]/g, '_');
+        const encodedName = encodeURIComponent(requestedName);
+        const contentType = upstream.headers.get('content-type') || 'application/octet-stream';
+
+        res.setHeader('Content-Type', contentType);
+        res.setHeader('Content-Disposition', `attachment; filename="${safeName}"; filename*=UTF-8''${encodedName}`);
+
+        const buffer = Buffer.from(await upstream.arrayBuffer());
+        res.send(buffer);
+    } catch (error) {
+        console.error('Artwork download error:', error.message);
+        res.status(500).json({ error: 'Artwork download failed' });
+    }
+});
 
 app.patch('/api/admin/orders/:id/tracking', authMiddleware, async (req, res) => {
     try {

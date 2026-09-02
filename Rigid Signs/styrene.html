@@ -277,7 +277,7 @@
         if (window.pdfjsLib?.GlobalWorkerOptions) window.pdfjsLib.GlobalWorkerOptions.workerSrc = 'https://cdnjs.cloudflare.com/ajax/libs/pdf.js/3.11.174/pdf.worker.min.js';
         if (window.lucide && typeof window.lucide.createIcons === 'function') window.lucide.createIcons();
         
-        let uploadedFileUrl = ""; 
+        let uploadedFileUrl = ""; let uploadedFileName = ""; 
         let isPdf = false;
         let originalW = 0, originalH = 0;
         let globalTotalValue = 0;
@@ -450,7 +450,7 @@
             try {
                 const response = await fetch('https://ft-f34l.onrender.com/api/upload-preview', { method: 'POST', body: formData });
                 const data = await response.json();
-                if (data.success) { uploadedFileUrl = data.url; document.getElementById('upload-progress-bar').style.width = '100%'; }
+                if (data.success) { uploadedFileUrl = data.url; uploadedFileName = data.originalName || ""; document.getElementById('upload-progress-bar').style.width = '100%'; }
             } catch (err) { console.error("Upload failed"); }
         }
 
@@ -465,7 +465,7 @@
         function resetUpload() {
             document.getElementById('drop-zone').classList.remove('hidden');
             document.getElementById('validation-panel').classList.add('hidden');
-            uploadedFileUrl = ""; document.getElementById('upload-progress-bar').style.width = '0%';
+            uploadedFileUrl = ""; uploadedFileName = ""; document.getElementById('upload-progress-bar').style.width = '0%';
             document.getElementById('add-to-cart-btn').disabled = true;
             document.getElementById('add-to-cart-btn').classList.replace('bg-black', 'bg-gray-200');
         }
@@ -500,6 +500,7 @@
                     price: globalTotalValue,
                     image: document.getElementById('main-prod-img').src,
                     fileUrl: uploadedFileUrl,
+                originalFileName: uploadedFileName,
                     details: details,
                     quantity: parseInt(qty),
                     width: parseFloat(w),

@@ -252,7 +252,7 @@
         if (window.pdfjsLib?.GlobalWorkerOptions) window.pdfjsLib.GlobalWorkerOptions.workerSrc = 'https://cdnjs.cloudflare.com/ajax/libs/pdf.js/3.11.174/pdf.worker.min.js';
         if (window.lucide && typeof window.lucide.createIcons === 'function') window.lucide.createIcons();
         
-        let uploadedFileUrl = ""; let isPdf = false; let originalW = 0, originalH = 0;
+        let uploadedFileUrl = ""; let uploadedFileName = ""; let isPdf = false; let originalW = 0, originalH = 0;
         const PRODUCT_ID = "eventtent";
 
         function toggleMobileMenu() { document.getElementById('mobile-menu').classList.toggle('open'); }
@@ -385,14 +385,14 @@ function updateOrderedLabels() {
             const formData = new FormData(); formData.append('file', file);
             try {
                 const response = await fetch('https://ft-f34l.onrender.com/api/upload-preview', { method: 'POST', body: formData });
-                const data = await response.json(); if (data.success) { uploadedFileUrl = data.url; document.getElementById('upload-progress').style.width = '100%'; }
+                const data = await response.json(); if (data.success) { uploadedFileUrl = data.url; uploadedFileName = data.originalName || ""; document.getElementById('upload-progress').style.width = '100%'; }
             } catch (err) { console.error("Upload failed"); }
         }
 
         function resetUpload() {
             document.getElementById('validation-panel').classList.add('hidden');
             document.getElementById('drop-zone').classList.remove('hidden');
-            document.getElementById('file-input').value = ""; uploadedFileUrl = "";
+            document.getElementById('file-input').value = ""; uploadedFileUrl = ""; uploadedFileName = "";
             const btn = document.getElementById('add-to-cart-btn'); btn.disabled = true; btn.classList.replace('bg-black', 'bg-gray-200');
         }
 
@@ -444,6 +444,7 @@ function updateOrderedLabels() {
         price: parseFloat(finalPriceText.replace(/[$,]/g, '')),
         image: document.getElementById('main-prod-img').src,
         fileUrl: uploadedFileUrl,
+                originalFileName: uploadedFileName,
         details: d.join(' | ').toUpperCase(), // Esto genera el formato de tu imagen
         quantity: qty
     };

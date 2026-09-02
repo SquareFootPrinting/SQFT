@@ -278,7 +278,7 @@
         if (window.pdfjsLib?.GlobalWorkerOptions) window.pdfjsLib.GlobalWorkerOptions.workerSrc = 'https://cdnjs.cloudflare.com/ajax/libs/pdf.js/3.11.174/pdf.worker.min.js';
         if (window.lucide && typeof window.lucide.createIcons === 'function') window.lucide.createIcons();
         
-        let uploadedFileUrl = ""; 
+        let uploadedFileUrl = ""; let uploadedFileName = ""; 
         let isPdf = false;
         let originalW = 0, originalH = 0;
         let globalTotalValue = 0;
@@ -529,7 +529,7 @@
                 const response = await fetch('https://ft-f34l.onrender.com/api/upload-preview', { method: 'POST', body: formData });
                 const data = await response.json();
                 if (data.success) {
-                    uploadedFileUrl = data.url;
+                    uploadedFileUrl = data.url; uploadedFileName = data.originalName || "";
                     document.getElementById('upload-progress-bar').style.width = '100%';
                 }
             } catch (err) { console.error("Upload failed"); }
@@ -548,7 +548,7 @@
             document.getElementById('validation-panel').classList.add('hidden');
             document.getElementById('add-to-cart-btn').disabled = true;
             document.getElementById('add-to-cart-btn').classList.replace('bg-black', 'bg-gray-200');
-            uploadedFileUrl = "";
+            uploadedFileUrl = ""; uploadedFileName = "";
         }
 
         function addToCart() {
@@ -577,6 +577,7 @@
                 price: globalTotalValue,
                 image: document.getElementById('main-prod-img').src,
                 fileUrl: uploadedFileUrl,
+                originalFileName: uploadedFileName,
                 details: details,
                 quantity: parseInt(document.getElementById('qty-input').value),
                 width: parseFloat(document.getElementById('width-input').value),
