@@ -430,6 +430,23 @@
         }
 
         function updateUIInfo(w, h) {
+            // PDF artwork can contain vector graphics or embedded raster images.
+            // Do not infer a physical print size from the PDF.js preview canvas.
+            if (isPdf) {
+                const dimsEl = document.getElementById('file-dims') || document.getElementById('file-dims-text');
+                if (dimsEl) dimsEl.innerText = 'PDF PREVIEW — FINAL ART SIZE WILL BE VERIFIED';
+                const dpiInfo = document.getElementById('dpi-info');
+                if (dpiInfo) {
+                    dpiInfo.innerHTML = 'PDF ARTWORK — MANUAL VERIFICATION';
+                    dpiInfo.className = 'text-blue-600 font-black italic text-[10px] flex items-center gap-1';
+                }
+                const statusTitle = document.getElementById('status-title');
+                if (statusTitle) {
+                    statusTitle.innerText = 'PDF READY FOR REVIEW ✓';
+                    statusTitle.className = 'text-[10px] font-black uppercase text-blue-600 italic';
+                }
+                return;
+            }
             const inchW = (w / 100).toFixed(2); 
             const inchH = (h / 100).toFixed(2);
             document.getElementById('file-dims-text').innerText = `${inchW}" x ${inchH}"`;
