@@ -552,6 +552,7 @@
         price: parseFloat(finalPriceText.replace(/[$,]/g, '')),
         image: mainImg,
         fileUrl: typeof uploadedFileUrl !== 'undefined' ? uploadedFileUrl : "",
+        originalFileName: typeof uploadedFileName !== 'undefined' ? uploadedFileName : "",
         details: itemDetails.join(' | ') + artNote,
         quantity: qty,
         // Dimensiones para que el servidor calcule el precio real por sqft
