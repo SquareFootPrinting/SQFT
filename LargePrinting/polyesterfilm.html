@@ -138,7 +138,7 @@
                                 </div>
                                 <div>
                                     <label class="text-[9px] font-black uppercase text-gray-400 block mb-2 italic tracking-widest">Lamination</label>
-                                    <select id="laminate-select" class="custom-dropdown text-black">
+                                    <select id="laminate-select" onchange="calculatePrice()" class="custom-dropdown text-black">
                                         <option value="gloss">Gloss UV Lamination</option>
                                         <option value="matte">Matte UV Lamination</option>
                                     </select>
@@ -309,7 +309,12 @@ function calculatePrice() {
     if (typeof window.getLargeFormatPrice === 'function') {
         const pricing = window.getLargeFormatPrice(PRODUCT_ID, { turn: turnVal });
         const area = (w * h) / 144;
-        const total = (pricing.unitPrice * area * qty) + (pricing.fixedFee * qty);
+        const finishAdd = parseFloat(document.getElementById('finish-select').value) || 0;
+        const productPricing = window.largeFormatPricing?.[PRODUCT_ID] || {};
+        const lamKey = document.getElementById('laminate-select').value;
+        const lamAdd = parseFloat(productPricing.lamination?.[lamKey] || 0);
+        const unitPrice = pricing.unitPrice + ((finishAdd + lamAdd) * pricing.multiplier);
+        const total = (unitPrice * area * qty) + (pricing.fixedFee * qty);
         document.getElementById('final-price').innerText = `$${total.toFixed(2)}`;
         document.getElementById('area-display').innerText = `${area.toFixed(3)} sq ft`;
     }

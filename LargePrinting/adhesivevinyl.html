@@ -251,7 +251,7 @@
         let uploadedFileUrl = ""; 
         let isPdf = false;
         let originalW = 0, originalH = 0;
-        const PRODUCT_ID = "backlit-film";
+        const PRODUCT_ID = "adhesive-vinyl";
 
         function toggleMobileMenu() { document.getElementById('mobile-menu').classList.toggle('open'); }
         function toggleCart() { 
@@ -356,14 +356,16 @@
             const finishKey = document.getElementById('finish-select').value;
 
             if (typeof window.getLargeFormatPrice === 'function') {
-                const pricing = window.getLargeFormatPrice("backlit-film", { turn: turnVal });
-                
-                // Obtenemos valores del JSON
-                const baseMaterial = window.largeFormatPricing["backlit-film"].material;
-                const lamAdd = parseFloat(window.largeFormatPricing["backlit-film"].lamination[lamKey] || 0);
-                const finishAdd = parseFloat(window.largeFormatPricing["backlit-film"].finishing[finishKey] || 0);
-                
-                // Sumamos base + extras y aplicamos Tier (Wholesale x1 / Retail x2)
+                const pricing = window.getLargeFormatPrice(PRODUCT_ID, { turn: turnVal });
+
+                // Use this product's own pricing record. Optional modifiers are only
+                // applied when they exist in the pricing catalog.
+                const productPricing = window.largeFormatPricing?.[PRODUCT_ID] || {};
+                const baseMaterial = parseFloat(productPricing.material || 0);
+                const lamAdd = parseFloat(productPricing.lamination?.[lamKey] || 0);
+                const finishAdd = parseFloat(productPricing.finishing?.[finishKey] || 0);
+
+                // Base + configured extras, then customer tier multiplier.
                 const unitRate = (baseMaterial + lamAdd + finishAdd) * pricing.multiplier;
                 
                 const area = (w * h) / 144;
