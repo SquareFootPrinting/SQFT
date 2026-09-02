@@ -453,7 +453,12 @@
         details: itemDetails.join(' | ') + artNote,
         quantity: qty,
         width: parseFloat(width),
-        height: parseFloat(height)
+        height: parseFloat(height),
+        pricingOptions: {
+            finishing: document.getElementById('finish-select')?.value || null,
+            pocket: document.getElementById('pocket-select')?.value || null,
+            turnaround: document.getElementById('turn-select')?.value || "0"
+        }
     };
 
     // 7. GUARDADO EN LOCALSTORAGE

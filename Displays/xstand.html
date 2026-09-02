@@ -481,7 +481,12 @@
         quantity: qty,
         // Dimensiones para que el servidor calcule el precio real por sqft
         width: widthInput ? parseFloat(widthInput.value) : 0,
-        height: heightInput ? parseFloat(heightInput.value) : 0
+        height: heightInput ? parseFloat(heightInput.value) : 0,
+        pricingOptions: {
+            size: document.getElementById('size-select')?.value || "24x63",
+            material: document.getElementById('material-select')?.value || "13oz",
+            turnaround: document.getElementById('turn-select')?.value || "Standard"
+        }
     };
 
     // 6. GUARDAR EN LOCALSTORAGE

@@ -1235,10 +1235,12 @@ async function calculateServerOrderTotal(items = [], shippingCost = 0, { isWhole
 
         let linePrice;
 
-        // Server-side pricing: Gallery Canvas is recalculated exclusively from
-        // MongoDB pricing + the selected configuration. Browser item.price is
-        // ignored for this product.
-        if (String(item?.productId || '') === 'gallery-canvas') {
+        const productId = String(item?.productId || '').trim();
+
+        // Server-side pricing: protected products are recalculated exclusively
+        // from MongoDB + canonical product configuration. Browser item.price is
+        // never trusted for these products.
+        if (productId === 'gallery-canvas') {
             const canvas = pricing?.largeFormatPricing?.['gallery-canvas'];
             const size = String(item?.pricingOptions?.size || '').trim();
             const turnaround = String(item?.pricingOptions?.turnaround || 'Standard').trim();
@@ -1256,6 +1258,78 @@ async function calculateServerOrderTotal(items = [], shippingCost = 0, { isWhole
             }
             const multiplier = isWholesale ? 1 : 2;
             linePrice = (base * multiplier * qty) + (turnaround === 'NextDay' ? 50 * qty : 0);
+        } else if (['standard-banner', 'mesh-banner', 'super-smooth', 'hd-banner-18oz'].includes(productId)) {
+            const product = pricing?.bannerPricing?.[productId];
+            const width = Number(item?.width);
+            const height = Number(item?.height);
+            const qty = Math.floor(Number(item?.quantity || 1));
+            const opts = item?.pricingOptions || {};
+            if (!product || !Number.isFinite(width) || width <= 0 || width > 40000 ||
+                !Number.isFinite(height) || height <= 0 || height > 40000 ||
+                !Number.isInteger(qty) || qty < 1 || qty > 1000) {
+                const error = new Error('Invalid banner configuration');
+                error.statusCode = 400;
+                throw error;
+            }
+
+            let wholesaleSqFt = Number(product.material || 0);
+            const finishing = opts.finishing == null ? null : String(opts.finishing);
+            const pocket = opts.pocket == null ? null : String(opts.pocket);
+            if (finishing && product.finishing?.[finishing] !== undefined) {
+                wholesaleSqFt += Number(product.finishing[finishing] || 0);
+            }
+            if (pocket && product.pocket?.[pocket] !== undefined) {
+                wholesaleSqFt += Number(product.pocket[pocket] || 0);
+            }
+            if (!Number.isFinite(wholesaleSqFt) || wholesaleSqFt <= 0) {
+                const error = new Error('Invalid banner pricing'); error.statusCode = 400; throw error;
+            }
+
+            const turnRaw = String(opts.turnaround ?? '0');
+            let fixedFee = 0;
+            if (productId === 'mesh-banner' && turnRaw === 'next-day') fixedFee = 50;
+            else if (turnRaw === '50' || turnRaw === 'Rush') fixedFee = 50;
+            else if (!['0', 'standard', 'Standard'].includes(turnRaw)) {
+                const error = new Error('Invalid banner turnaround'); error.statusCode = 400; throw error;
+            }
+
+            const calcWidth = productId === 'super-smooth' && width < 30 ? 36 : width;
+            const calcHeight = productId === 'super-smooth' && height < 30 ? 36 : height;
+            const area = (calcWidth * calcHeight) / 144;
+            const multiplier = isWholesale ? 1 : 2;
+            linePrice = (area * wholesaleSqFt * multiplier * qty) + fixedFee;
+        } else if (productId === 'custom-sticker') {
+            const product = pricing?.stickerPricing?.['custom-sticker'];
+            const width = Number(item?.width);
+            const height = Number(item?.height);
+            const qty = Math.floor(Number(item?.quantity || 0));
+            const material = String(item?.pricingOptions?.material || item?.variantKey || '').trim();
+            const rate = Number(product?.material?.[material]);
+            if (!product || !Number.isFinite(width) || width < 1 || width > 11 ||
+                !Number.isFinite(height) || height < 1 || height > 11 ||
+                !Number.isInteger(qty) || qty < 1 || qty > 100000 ||
+                !material || !Number.isFinite(rate) || rate <= 0) {
+                const error = new Error('Invalid sticker configuration');
+                error.statusCode = 400;
+                throw error;
+            }
+            const multiplier = isWholesale ? 1 : 2;
+            const subtotal = ((width * height) / 144) * qty * rate * multiplier;
+            linePrice = Math.max(Number(product.minOrder || 50), subtotal);
+        } else if (productId === 'x-stand') {
+            const product = pricing?.displaysPricing?.['x-stand'];
+            const qty = Math.floor(Number(item?.quantity || 1));
+            const size = String(item?.pricingOptions?.size || '').trim();
+            const material = String(item?.pricingOptions?.material || '').trim();
+            const turnaround = String(item?.pricingOptions?.turnaround || '').trim();
+            const base = Number(product?.matrix?.[size]?.[material]?.[turnaround]);
+            if (!product || !Number.isInteger(qty) || qty < 1 || qty > 1000 ||
+                !size || !material || !turnaround || !Number.isFinite(base) || base <= 0) {
+                const error = new Error('Invalid X-Stand configuration');
+                error.statusCode = 400;
+                throw error;
+            }
+            linePrice = base * (isWholesale ? 1 : 2) * qty;
         } else {
             // Legacy products are still validated by production minimums. They
             // remain on the migration list for full server-side pricing.
