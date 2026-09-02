@@ -2093,25 +2093,69 @@ app.get('/api/admin/orders/:id/artwork/:itemIndex/download', authMiddleware, asy
             return res.status(400).json({ error: 'Invalid artwork source' });
         }
 
-        const upstream = await fetch(artworkUrl);
-        if (!upstream.ok) {
-            return res.status(502).json({ error: 'Unable to download artwork' });
-        }
-
         const fallbackExt = path.extname(artworkUrl.pathname) || '';
         const requestedName = path.basename(String(item.originalFileName || `artwork-${order.order_id || 'order'}${fallbackExt}`));
         const safeName = requestedName.replace(/[\r\n"\\/]/g, '_');
         const encodedName = encodeURIComponent(requestedName);
-        const contentType = upstream.headers.get('content-type') || 'application/octet-stream';
 
-        res.setHeader('Content-Type', contentType);
-        res.setHeader('Content-Disposition', `attachment; filename="${safeName}"; filename*=UTF-8''${encodedName}`);
+        // Use Node's HTTPS stream instead of fetch(). This avoids buffering large
+        // artwork files and is more reliable with Cloudinary binary/PDF responses.
+        const https = require('https');
 
-        const buffer = Buffer.from(await upstream.arrayBuffer());
-        res.send(buffer);
+        const streamCloudinaryFile = (remoteUrl, redirectsLeft = 3) => {
+            const request = https.get(remoteUrl, {
+                headers: {
+                    'User-Agent': 'SquareFootPrinting/1.0',
+                    'Accept': '*/*'
+                }
+            }, upstream => {
+                const statusCode = upstream.statusCode || 0;
+                const location = upstream.headers.location;
+
+                if (statusCode >= 300 && statusCode < 400 && location && redirectsLeft > 0) {
+                    upstream.resume();
+                    const nextUrl = new URL(location, remoteUrl);
+                    return streamCloudinaryFile(nextUrl, redirectsLeft - 1);
+                }
+
+                if (statusCode < 200 || statusCode >= 300) {
+                    upstream.resume();
+                    if (!res.headersSent) {
+                        return res.status(502).json({ error: `Unable to download artwork (${statusCode || 'network error'})` });
+                    }
+                    return res.end();
+                }
+
+                res.setHeader('Content-Type', upstream.headers['content-type'] || 'application/octet-stream');
+                if (upstream.headers['content-length']) {
+                    res.setHeader('Content-Length', upstream.headers['content-length']);
+                }
+                res.setHeader('Cache-Control', 'private, no-store');
+                res.setHeader('Content-Disposition', `attachment; filename="${safeName}"; filename*=UTF-8''${encodedName}`);
+
+                upstream.on('error', streamError => {
+                    console.error('Artwork upstream stream error:', streamError.message);
+                    if (!res.headersSent) res.status(502).json({ error: 'Unable to download artwork' });
+                    else res.destroy(streamError);
+                });
+
+                upstream.pipe(res);
+            });
+
+            request.setTimeout(30000, () => {
+                request.destroy(new Error('Artwork download timed out'));
+            });
+
+            request.on('error', requestError => {
+                console.error('Artwork upstream request error:', requestError.message);
+                if (!res.headersSent) res.status(502).json({ error: 'Unable to download artwork' });
+            });
+        };
+
+        streamCloudinaryFile(artworkUrl);
     } catch (error) {
         console.error('Artwork download error:', error.message);
-        res.status(500).json({ error: 'Artwork download failed' });
+        if (!res.headersSent) res.status(500).json({ error: 'Artwork download failed' });
     }
 });
 

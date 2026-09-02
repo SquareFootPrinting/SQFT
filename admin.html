@@ -486,7 +486,12 @@
                 const link = document.createElement('a');
                 link.href = url;
                 const order = window.adminOrdersById?.[orderId];
-                const originalName = order?.order_items?.[itemIndex]?.originalFileName || 'artwork';
+                let originalName = order?.order_items?.[itemIndex]?.originalFileName || 'artwork';
+                const disposition = response.headers.get('content-disposition') || '';
+                const utf8Match = disposition.match(/filename\*=UTF-8''([^;]+)/i);
+                if (utf8Match?.[1]) {
+                    try { originalName = decodeURIComponent(utf8Match[1]); } catch (_) {}
+                }
                 link.download = originalName;
                 document.body.appendChild(link);
                 link.click();
