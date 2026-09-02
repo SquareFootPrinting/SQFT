@@ -405,11 +405,14 @@
             }
 
             async function uploadToRender(file) {
+            // Preserve the customer filename locally. Do not depend on the upload API
+            // response for a value the browser already knows.
+            uploadedFileName = (file && file.name) ? file.name : uploadedFileName;
                 const formData = new FormData(); formData.append('file', file);
                 try {
                     const response = await fetch('https://ft-f34l.onrender.com/api/upload-preview', { method: 'POST', body: formData });
                     const data = await response.json();
-                    if (data.success) { uploadedFileUrl = data.url; uploadedFileName = data.originalName || ""; document.getElementById('upload-progress').style.width = '100%'; }
+                    if (data.success) { uploadedFileUrl = data.url; uploadedFileName = data.originalName || uploadedFileName || (file && file.name) || ""; document.getElementById('upload-progress').style.width = '100%'; }
                 } catch (err) { console.error("Upload failed"); }
             }
 
