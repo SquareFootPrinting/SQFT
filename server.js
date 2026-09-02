@@ -1207,12 +1207,14 @@ function moneyNumber(value) {
 
 const FLAT_SHIPPING_FEE = 25;
 
-async function calculateServerOrderTotal(items = [], shippingCost = 0) {
+async function calculateServerOrderTotal(items = [], shippingCost = 0, { isWholesale = false } = {}) {
     const catalog = await PricingCatalog.findOne({ key: 'storefront' }).lean();
-    const productionTypes = catalog?.pricing?.SFP_PRICING_CONFIG?.productionTypes || {};
-    const defaultMinimum = Number(catalog?.pricing?.SFP_PRICING_CONFIG?.defaultMinimumOrder || 50);
+    const pricing = catalog?.pricing || {};
+    const productionTypes = pricing?.SFP_PRICING_CONFIG?.productionTypes || {};
+    const defaultMinimum = Number(pricing?.SFP_PRICING_CONFIG?.defaultMinimumOrder || 50);
     const totals = {};
     const minimums = {};
+    const authoritativeItems = [];
 
     if (!Array.isArray(items) || items.length === 0) {
         const error = new Error('Order must contain at least one item');
@@ -1231,13 +1233,42 @@ async function calculateServerOrderTotal(items = [], shippingCost = 0) {
             throw error;
         }
 
-        const linePrice = moneyNumber(item.price);
+        let linePrice;
+
+        // Server-side pricing: Gallery Canvas is recalculated exclusively from
+        // MongoDB pricing + the selected configuration. Browser item.price is
+        // ignored for this product.
+        if (String(item?.productId || '') === 'gallery-canvas') {
+            const canvas = pricing?.largeFormatPricing?.['gallery-canvas'];
+            const size = String(item?.pricingOptions?.size || '').trim();
+            const turnaround = String(item?.pricingOptions?.turnaround || 'Standard').trim();
+            const qty = Math.max(1, Math.floor(Number(item?.quantity || 1)));
+            const base = Number(canvas?.sizes?.[size]);
+            if (!canvas || !size || !Number.isFinite(base) || base <= 0 || qty > 1000) {
+                const error = new Error('Invalid Gallery Canvas configuration');
+                error.statusCode = 400;
+                throw error;
+            }
+            if (!['Standard', 'NextDay'].includes(turnaround)) {
+                const error = new Error('Invalid Gallery Canvas turnaround');
+                error.statusCode = 400;
+                throw error;
+            }
+            const multiplier = isWholesale ? 1 : 2;
+            linePrice = (base * multiplier * qty) + (turnaround === 'NextDay' ? 50 * qty : 0);
+        } else {
+            // Legacy products are still validated by production minimums. They
+            // remain on the migration list for full server-side pricing.
+            linePrice = moneyNumber(item.price);
+        }
+
         if (!Number.isFinite(linePrice) || linePrice <= 0) {
             const error = new Error('Invalid item price');
             error.statusCode = 400;
             throw error;
         }
-
+        linePrice = Number(linePrice.toFixed(2));
+        authoritativeItems.push({ ...item, price: linePrice });
         totals[key] = (totals[key] || 0) + linePrice;
         const configuredMinimum = Number(typeConfig.minimumOrder ?? defaultMinimum);
         minimums[key] = Math.max(minimums[key] || 0, Number.isFinite(configuredMinimum) ? configuredMinimum : defaultMinimum);
@@ -1249,7 +1280,8 @@ async function calculateServerOrderTotal(items = [], shippingCost = 0) {
     );
     return {
         subtotal: Number(subtotal.toFixed(2)),
-        total: Number((subtotal + Number(shippingCost || 0)).toFixed(2))
+        total: Number((subtotal + Number(shippingCost || 0)).toFixed(2)),
+        items: authoritativeItems
     };
 }
 
@@ -1377,7 +1409,7 @@ app.post(
                 shippingService = { serviceName: 'Flat Rate Shipping', amount: FLAT_SHIPPING_FEE, currency: 'USD' };
             }
 
-            const calculated = await calculateServerOrderTotal(orderData.order_items, shippingCost);
+            const calculated = await calculateServerOrderTotal(orderData.order_items, shippingCost, { isWholesale: serverWholesale });
             const clientTotal = moneyNumber(orderData.total_price);
             if (Math.abs(clientTotal - calculated.total) > 0.01) {
                 return res.status(409).json({ success:false, error:'Order total changed. Refresh checkout and try again.', serverTotal:calculated.total });
@@ -1404,7 +1436,7 @@ app.post(
                 shipping_cost: shippingCost,
                 payment_method: orderData.payment_method || 'card',
                 total_price: `$${calculated.total.toFixed(2)}`,
-                order_items: orderData.order_items,
+                order_items: calculated.items,
                 payment_status: 'Pending',
                 transaction_id: ''
             };

@@ -561,6 +561,10 @@
         fileUrl: typeof uploadedFileUrl !== 'undefined' ? uploadedFileUrl : "",
         details: itemDetails.join(' | ') + artNote,
         quantity: qty,
+        pricingOptions: {
+            size: document.getElementById('size-select')?.value || '',
+            turnaround: document.getElementById('turn-select')?.value || 'Standard'
+        },
         // Dimensiones para que el servidor calcule el precio real por sqft
         width: widthInput ? parseFloat(widthInput.value) : 0,
         height: heightInput ? parseFloat(heightInput.value) : 0
